@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="42" fill="#2E5142"/>
+  <circle cx="96" cy="96" r="56" stroke="#B5CDC0" stroke-width="10" fill="none" stroke-linecap="round"
+    stroke-dasharray="264 353" transform="rotate(-90 96 96)"/>
+  <circle cx="152" cy="40" r="12" fill="#D96B43"/>
+  <text x="96" y="165" text-anchor="middle" font-family="Georgia,serif" font-size="52" font-style="italic" fill="#FAF6EC" letter-spacing="-1">V</text>
+</svg>
