@@ -142,6 +142,7 @@ const Icons={
   Edit:IC(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>),
   X:IC(<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>),
   Wand:IC(<><path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M15 9h0M17.8 6.2 19 5m-3 21 9-9M12.2 6.2 11 5"/></>),
+  Drop:IC(<><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></>),
 };
 
 // ═══════════════════════════════════════════════
@@ -171,11 +172,38 @@ function PillBtn({children,p,onClick,kind='primary',style,icon,size='md',disable
 function Chip({children,p,active,style,onClick}){
   return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:R.pill,background:active?p.ink:'transparent',color:active?p.bgElev:p.ink,border:`0.5px solid ${active?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',...style}}>{children}</button>;
 }
-function TabBar({tabs,active,onTab,p,onLogShot}){
+function TabBar({tabs,active,onTab,p,onAction}){
   return <div style={{position:'absolute',bottom:0,left:0,right:0,paddingBottom:'max(28px,env(safe-area-inset-bottom))',paddingTop:8,background:`linear-gradient(to top,${p.bg} 60%,${p.bg}00)`,display:'flex',justifyContent:'space-around',alignItems:'center',zIndex:30}}>
     {tabs.slice(0,2).map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 10px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:60}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
-    <button onClick={onLogShot} style={{width:54,height:54,borderRadius:27,background:p.ink,color:p.bgElev,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 8px 20px ${p.ink}40`,marginTop:-22,flexShrink:0}}><Icons.Plus size={22} color={p.bgElev}/></button>
+    <button onClick={onAction} style={{width:54,height:54,borderRadius:27,background:p.ink,color:p.bgElev,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 8px 20px ${p.ink}40`,marginTop:-22,flexShrink:0}}><Icons.Plus size={22} color={p.bgElev}/></button>
     {tabs.slice(2).map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 10px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:60}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
+  </div>;
+}
+
+// Quick action sheet triggered by + button
+function QuickActionSheet({p,onShot,onWeight,onWater,onClose}){
+  const actions=[
+    {label:'Log a shot',sub:'Injection dose & site',icon:Icons.Pill,color:p.primary,soft:p.primarySoft,fn:onShot},
+    {label:'Log weight',sub:'Today\'s weigh-in',icon:Icons.Weight,color:p.weight,soft:p.weightSoft,fn:onWeight},
+    {label:'Log water',sub:'Daily oz intake',icon:Icons.Wave,color:p.accent,soft:p.accentSoft,fn:onWater},
+  ];
+  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 16px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 20px'}}/>
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {actions.map(a=>(
+          <button key={a.label} onClick={a.fn} style={{display:'flex',alignItems:'center',gap:14,padding:'16px 18px',borderRadius:R.lg,background:p.bgInset,border:`0.5px solid ${p.line}`,cursor:'pointer',textAlign:'left'}}>
+            <div style={{width:42,height:42,borderRadius:21,background:a.soft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><a.icon size={20} color={a.color}/></div>
+            <div>
+              <div style={{fontFamily:TYPE.ui,fontSize:15,color:p.ink,fontWeight:500}}>{a.label}</div>
+              <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkMuted,marginTop:2}}>{a.sub}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+      <button onClick={onClose} style={{width:'100%',marginTop:12,padding:'14px',borderRadius:R.pill,background:'transparent',border:`0.5px solid ${p.line}`,color:p.inkSoft,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer'}}>Cancel</button>
+    </div>
   </div>;
 }
 function ScreenHeader({p,eyebrow,title,action,sub}){
@@ -516,7 +544,7 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
 // ═══════════════════════════════════════════════
 // SCREEN: TODAY
 // ═══════════════════════════════════════════════
-function ScreenToday({p,store,onLogShot,onGoTab,onUpdate}){
+function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
   const NOW=Date.now();
   const [editingShot,setEditingShot]=React.useState(null);
   const level=getCurrentLevel(store,NOW);
@@ -601,6 +629,40 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate}){
         </div>
       </Card>
     </div>}
+
+    {/* Water glance */}
+    {(()=>{
+      const today=new Date().toISOString().slice(0,10);
+      const waterGoal=store.waterGoalOz||64;
+      const todayWater=store.water?.find(w=>w.date===today);
+      const oz=todayWater?.oz||0;
+      const pct=Math.min(1,oz/waterGoal);
+      return <div style={{padding:'0 16px 14px'}}>
+        <button onClick={()=>onGoTab('weight')} style={{width:'100%',textAlign:'left',background:'none',border:'none',cursor:'pointer',padding:0}}>
+          <Card p={p} padding={14}>
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              <div style={{width:40,height:40,borderRadius:20,background:p.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative',overflow:'hidden'}}>
+                <div style={{position:'absolute',bottom:0,left:0,right:0,height:`${pct*100}%`,background:`${p.accent}35`,transition:'height 0.5s'}}/>
+                <Icons.Drop size={18} color={p.accent} style={{position:'relative'}}/>
+              </div>
+              <div style={{flex:1}}>
+                <Eyebrow p={p} style={{marginBottom:3}}>Water today</Eyebrow>
+                <div style={{display:'flex',alignItems:'baseline',gap:6}}>
+                  <span style={{fontFamily:TYPE.display,fontSize:24,color:p.ink,letterSpacing:'-0.02em',lineHeight:0.9}}>{oz}</span>
+                  <span style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft}}>/ {waterGoal} oz</span>
+                </div>
+              </div>
+              <div style={{width:60}}>
+                <div style={{height:5,borderRadius:3,background:p.bgInset,overflow:'hidden'}}>
+                  <div style={{height:'100%',width:`${pct*100}%`,borderRadius:3,background:p.accent}}/>
+                </div>
+                <div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,marginTop:3,textAlign:'right'}}>{Math.round(pct*100)}%</div>
+              </div>
+            </div>
+          </Card>
+        </button>
+      </div>;
+    })()}
 
     {store.shots.length>0&&<>
       <div style={{padding:'8px 22px 8px',display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
@@ -742,13 +804,113 @@ function ScreenLevels({p,store,onUpdate}){
 }
 
 // ═══════════════════════════════════════════════
+// LOG WEIGHT SHEET
+// ═══════════════════════════════════════════════
+function LogWeightSheet({p,store,onSave,onClose}){
+  const [weight,setWeight]=React.useState('');
+  const [date,setDate]=React.useState(new Date().toISOString().slice(0,10));
+  function handleSave(){
+    const w=parseFloat(weight);
+    if(isNaN(w)||w<50||w>700)return;
+    const existing=store.weights.find(x=>x.date===date);
+    let newWeights;
+    if(existing){
+      newWeights=store.weights.map(x=>x.date===date?{...x,weight:w}:x);
+    } else {
+      newWeights=[...store.weights,{id:`wt_${Date.now()}`,weight:w,date,notes:''}].sort((a,b)=>a.date.localeCompare(b.date));
+    }
+    const ns={...store,weights:newWeights};
+    saveStore(ns);onSave(ns);
+  }
+  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>Log weight</div>
+        <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Date</div>
+        <input type="date" value={date} max={new Date().toISOString().slice(0,10)} onChange={e=>setDate(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
+      </div>
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Weight (lbs)</div>
+        <input type="number" placeholder="e.g. 235" value={weight} onChange={e=>setWeight(e.target.value)} autoFocus style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:22,color:p.ink,outline:'none'}}/>
+      </div>
+      <PillBtn p={p} kind="primary" size="lg" onClick={handleSave} disabled={!weight} style={{width:'100%'}} icon={<Icons.Check size={18} color={p.bgElev}/>}>
+        Save {weight?`${weight} lbs`:'weight'}
+      </PillBtn>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════
+// LOG WATER SHEET
+// ═══════════════════════════════════════════════
+function LogWaterSheet({p,store,onSave,onClose}){
+  const today=new Date().toISOString().slice(0,10);
+  const todayEntry=store.water?.find(w=>w.date===today);
+  const [oz,setOz]=React.useState(String(todayEntry?.oz||''));
+  const goal=store.waterGoalOz||64;
+  const quickAmounts=[8,12,16,20,24,32];
+  function addOz(add){
+    const current=parseFloat(oz)||0;
+    setOz(String(+(current+add).toFixed(0)));
+  }
+  function handleSave(){
+    const total=parseFloat(oz)||0;
+    if(total<0)return;
+    const newWater=[...(store.water||[]).filter(w=>w.date!==today),{id:`w_${Date.now()}`,date:today,oz:total}];
+    const ns={...store,water:newWater};
+    saveStore(ns);onSave(ns);
+  }
+  const pct=Math.min(1,(parseFloat(oz)||0)/goal);
+  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>Log water</div>
+        <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+      </div>
+      {/* Progress bar */}
+      <div style={{marginBottom:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+          <Eyebrow p={p}>Today's total</Eyebrow>
+          <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.accent}}>{parseFloat(oz)||0} / {goal} oz</span>
+        </div>
+        <div style={{height:8,borderRadius:4,background:p.bgInset,overflow:'hidden'}}>
+          <div style={{height:'100%',width:`${pct*100}%`,borderRadius:4,background:p.accent,transition:'width 0.3s'}}/>
+        </div>
+      </div>
+      {/* Quick add */}
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:10}}>Quick add</Eyebrow>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {quickAmounts.map(a=>(
+            <button key={a} onClick={()=>addOz(a)} style={{flex:'1 1 50px',padding:'10px 6px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500,cursor:'pointer'}}>+{a} oz</button>
+          ))}
+        </div>
+      </div>
+      {/* Manual input */}
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Or set total oz for today</div>
+        <input type="number" placeholder="e.g. 64" value={oz} onChange={e=>setOz(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:18,color:p.ink,outline:'none'}}/>
+      </div>
+      <PillBtn p={p} kind="accent" size="lg" onClick={handleSave} disabled={!oz} style={{width:'100%'}} icon={<Icons.Drop size={18} color="#fff"/>}>
+        Save {oz?`${oz} oz`:'water'}
+      </PillBtn>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════
 // SCREEN: WEIGHT
 // ═══════════════════════════════════════════════
-function ScreenWeight({p,store,onUpdate}){
+function ScreenWeight({p,store,onUpdate,onLogWeight}){
   const NOW=Date.now();
-  const [newWeight,setNewWeight]=React.useState('');
-  const [adding,setAdding]=React.useState(false);
-  const wts=store.weights||[];
+  const wts=(store.weights||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
   const current=wts.length?wts[wts.length-1].weight:null;
   const start=store.startWeight,goal=store.goalWeight;
   const totalLost=start&&current?+(start-current).toFixed(1):null;
@@ -759,38 +921,58 @@ function ScreenWeight({p,store,onUpdate}){
   const pace=fourWeeksAgo&&current?+((fourWeeksAgo-current)/4).toFixed(2):null;
   const weeksToGoal=pace&&pace>0&&toGo?Math.ceil(toGo/pace):null;
   const goalDate=weeksToGoal?new Date(NOW+weeksToGoal*7*86400000):null;
-  const W=358,H=160,padL=14,padR=14,padT=14,padB=28,plotW=W-padL-padR,plotH=H-padT-padB;
-  const allW=wts.map(w=>w.weight);
-  const wMin=(goal?Math.min(...allW,goal):allW.length?Math.min(...allW):0)-2;
-  const wMax=(start?Math.max(...allW,start):allW.length?Math.max(...allW):100)+2;
-  const wRange=(wMax-wMin)||1;
-  const xH=i=>padL+(i/(wts.length-1||1))*plotW;
-  const yH=v=>padT+plotH-((v-wMin)/wRange)*plotH;
-  const linePath=wts.length>1?wts.map((w,i)=>`${i===0?'M':'L'} ${xH(i).toFixed(1)} ${yH(w.weight).toFixed(1)}`).join(' '):'';
-  const areaPath=linePath?linePath+` L ${xH(wts.length-1)} ${padT+plotH} L ${padL} ${padT+plotH} Z`:'';
 
-  function logWeight(){
-    const w=parseFloat(newWeight);
-    if(isNaN(w)||w<50||w>700)return;
-    const updated={...store,weights:[...wts,{id:`wt_${Date.now()}`,weight:w,date:new Date().toISOString().slice(0,10),notes:''}]};
-    saveStore(updated);onUpdate(updated);setNewWeight('');setAdding(false);
-  }
+  // Today's water
+  const today=new Date().toISOString().slice(0,10);
+  const todayWater=store.water?.find(w=>w.date===today);
+  const waterGoal=store.waterGoalOz||64;
+  const waterOz=todayWater?.oz||0;
+  const waterPct=Math.min(1,waterOz/waterGoal);
+
+  // Chart — time-based x axis
+  const W=358,H=180,padL=14,padR=14,padT=20,padB=32,plotW=W-padL-padR,plotH=H-padT-padB;
+  const allW=wts.map(w=>w.weight);
+  const wMin=allW.length?(goal?Math.min(...allW,goal):Math.min(...allW))-3:100;
+  const wMax=allW.length?(start?Math.max(...allW,start):Math.max(...allW))+3:300;
+  const wRange=(wMax-wMin)||1;
+  const tFirst=wts.length?new Date(wts[0].date).getTime():NOW-86400000*30;
+  const tLast=Math.max(wts.length?new Date(wts[wts.length-1].date).getTime():NOW, NOW);
+  const tRange=(tLast-tFirst)||86400000;
+  const xT=t=>padL+((t-tFirst)/tRange)*plotW;
+  const yW=v=>padT+plotH-((v-wMin)/wRange)*plotH;
+  const linePath=wts.length>1?wts.map((w,i)=>`${i===0?'M':'L'} ${xT(new Date(w.date).getTime()).toFixed(1)} ${yW(w.weight).toFixed(1)}`).join(' '):'';
+  const areaPath=linePath?linePath+` L ${xT(tLast).toFixed(1)} ${padT+plotH} L ${padL} ${padT+plotH} Z`:'';
 
   return <div style={{padding:'8px 0 110px',fontFamily:TYPE.ui,background:p.bg,minHeight:'100%'}}>
     <ScreenHeader p={p} eyebrow="Body weight"
       title={totalLost&&totalLost>0?<span>Down <span style={{fontStyle:'italic',color:p.accent}}>{totalLost}</span> lbs</span>:<span style={{fontStyle:'italic'}}>Weight</span>}
       sub={start&&store.startDate?`Since ${fmtDate(store.startDate,{month:'long',day:'numeric'})} · ${Math.round((NOW-new Date(store.startDate))/(86400000*7))} weeks in`:'Track your progress'}
-      action={<button onClick={()=>setAdding(a=>!a)} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:R.pill,background:adding?p.primarySoft:p.bgInset,color:adding?p.primary:p.ink,border:`0.5px solid ${adding?p.primary:p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}><Icons.Plus size={14}/> Log</button>}
+      action={<button onClick={onLogWeight} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:R.pill,background:p.bgInset,color:p.ink,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}><Icons.Plus size={14}/> Log</button>}
     />
-    {adding&&<div style={{padding:'0 16px 14px'}}>
-      <Card p={p} padding={18}>
-        <Eyebrow p={p} style={{marginBottom:12}}>Log today's weight</Eyebrow>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <input type="number" placeholder="Weight in lbs" value={newWeight} onChange={e=>setNewWeight(e.target.value)} style={{flex:1,padding:'12px 14px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
-          <PillBtn p={p} kind="primary" onClick={logWeight} disabled={!newWeight}>Save</PillBtn>
+
+    {/* Water card */}
+    <div style={{padding:'0 16px 14px'}}>
+      <Card p={p} padding={16}>
+        <div style={{display:'flex',alignItems:'center',gap:16}}>
+          <div style={{width:56,height:56,borderRadius:28,background:p.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,position:'relative',overflow:'hidden'}}>
+            <div style={{position:'absolute',bottom:0,left:0,right:0,height:`${waterPct*100}%`,background:`${p.accent}40`,transition:'height 0.5s'}}/>
+            <Icons.Drop size={22} color={p.accent} style={{position:'relative'}}/>
+          </div>
+          <div style={{flex:1}}>
+            <Eyebrow p={p} style={{marginBottom:4}}>Water today</Eyebrow>
+            <div style={{display:'flex',alignItems:'baseline',gap:4}}>
+              <span style={{fontFamily:TYPE.display,fontSize:32,color:p.ink,letterSpacing:'-0.02em',lineHeight:0.9}}>{waterOz}</span>
+              <span style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>/ {waterGoal} oz</span>
+            </div>
+            <div style={{height:5,borderRadius:3,background:p.bgInset,marginTop:8,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${waterPct*100}%`,borderRadius:3,background:p.accent,transition:'width 0.5s'}}/>
+            </div>
+          </div>
         </div>
       </Card>
-    </div>}
+    </div>
+
+    {/* Progress ring */}
     {start&&goal&&current&&<div style={{padding:'0 16px 14px'}}>
       <Card p={p} padding={18}>
         <div style={{display:'flex',alignItems:'center',gap:20}}>
@@ -801,40 +983,79 @@ function ScreenWeight({p,store,onUpdate}){
             <div style={{fontFamily:TYPE.display,fontSize:40,color:p.ink,lineHeight:0.9,letterSpacing:'-0.02em'}}>{current}</div>
             <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginTop:4}}>lbs current</div>
             <div style={{display:'flex',gap:16,marginTop:10}}>
-              <div><div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.1em'}}>GOAL</div><div style={{fontFamily:TYPE.ui,fontSize:14,color:p.ink,fontWeight:500}}>{goal} lbs</div></div>
-              {toGo>0&&<div><div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.1em'}}>TO GO</div><div style={{fontFamily:TYPE.ui,fontSize:14,color:p.ink,fontWeight:500}}>{toGo} lbs</div></div>}
+              <div><div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.1em'}}>START</div><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>{start} lbs</div></div>
+              <div><div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.1em'}}>GOAL</div><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>{goal} lbs</div></div>
+              {toGo>0&&<div><div style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.1em'}}>TO GO</div><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.weight,fontWeight:500}}>{toGo} lbs</div></div>}
             </div>
             {goalDate&&toGo>0&&<div style={{fontFamily:TYPE.ui,fontSize:11,color:p.success,marginTop:6}}>Projected: {fmtDate(goalDate,{month:'short',year:'numeric'})} at current pace</div>}
           </div>
         </div>
       </Card>
     </div>}
+
+    {/* Chart */}
     {wts.length>1&&<div style={{padding:'0 16px 14px'}}>
       <Card p={p} padding={0} style={{overflow:'hidden'}}>
-        <div style={{padding:'16px 18px 8px'}}><Eyebrow p={p}>Trend</Eyebrow></div>
+        <div style={{padding:'16px 18px 4px',display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+          <Eyebrow p={p}>Progress</Eyebrow>
+          {goal&&<span style={{fontFamily:TYPE.ui,fontSize:11,color:p.success}}>— goal line</span>}
+        </div>
         <div style={{padding:'0 14px 8px'}}>
           <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
-            <defs><linearGradient id="wtFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={p.weight} stopOpacity="0.18"/><stop offset="100%" stopColor={p.weight} stopOpacity="0"/></linearGradient></defs>
-            {goal&&<line x1={padL} x2={W-padR} y1={yH(goal)} y2={yH(goal)} stroke={p.success} strokeWidth="1" strokeDasharray="4 4"/>}
-            <path d={areaPath} fill="url(#wtFill)"/>
-            <path d={linePath} stroke={p.weight} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-            <circle cx={xH(wts.length-1)} cy={yH(current)} r="5" fill={p.weight} stroke={p.bgElev} strokeWidth="2"/>
+            <defs>
+              <linearGradient id="wtFill2" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={p.weight} stopOpacity="0.2"/>
+                <stop offset="100%" stopColor={p.weight} stopOpacity="0"/>
+              </linearGradient>
+            </defs>
+            {/* Grid lines */}
+            {[0.25,0.5,0.75].map((g,i)=>(
+              <line key={i} x1={padL} x2={W-padR} y1={padT+plotH*g} y2={padT+plotH*g} stroke={p.chartGrid} strokeWidth="0.5" strokeDasharray="3 4"/>
+            ))}
+            {/* Weight labels on y axis */}
+            {[0,0.5,1].map((g,i)=>{
+              const wVal=(wMax-g*(wMax-wMin)).toFixed(0);
+              return <text key={i} x={padL-2} y={padT+plotH*g+4} textAnchor="end" fill={p.inkMuted} style={{fontFamily:TYPE.mono,fontSize:9}}>{wVal}</text>;
+            })}
+            {/* Goal line */}
+            {goal&&<line x1={padL} x2={W-padR} y1={yW(goal)} y2={yW(goal)} stroke={p.success} strokeWidth="1.5" strokeDasharray="5 4"/>}
+            {/* Start line */}
+            {start&&wts.length>0&&<line x1={padL} x2={W-padR} y1={yW(start)} y2={yW(start)} stroke={p.inkMuted} strokeWidth="0.5" strokeDasharray="2 4"/>}
+            {/* Area + line */}
+            <path d={areaPath} fill="url(#wtFill2)"/>
+            <path d={linePath} stroke={p.weight} strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+            {/* Data points */}
+            {wts.map((w,i)=>(
+              <circle key={w.id} cx={xT(new Date(w.date).getTime())} cy={yW(w.weight)} r={i===wts.length-1?5:3} fill={p.weight} stroke={p.bgElev} strokeWidth="1.5"/>
+            ))}
+            {/* Date labels */}
+            {wts.length>0&&[0,Math.floor(wts.length/2),wts.length-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>(
+              <text key={i} x={xT(new Date(wts[i].date).getTime())} y={H-4} textAnchor="middle" fill={p.inkMuted} style={{fontFamily:TYPE.mono,fontSize:9}}>{fmtDate(wts[i].date,{month:'short',day:'numeric'}).toUpperCase()}</text>
+            ))}
           </svg>
         </div>
       </Card>
     </div>}
-    {wts.length>0&&<><div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Recent entries</Eyebrow></div>
+
+    {/* History */}
+    {wts.length>0&&<><div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>History</Eyebrow></div>
     <div style={{padding:'0 16px 16px'}}>
       <Card p={p} padding={0}>
-        {[...wts].slice(-5).reverse().map((w,i,arr)=>(
-          <div key={w.id} style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`}}>
+        {[...wts].slice(-8).reverse().map((w,i,arr)=>{
+          const prev=arr[i+1];
+          const delta=prev?+(w.weight-prev.weight).toFixed(1):null;
+          return <div key={w.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`}}>
             <div style={{width:36,height:36,borderRadius:18,background:p.weightSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Weight size={16} color={p.weight}/></div>
             <div style={{flex:1}}>
-              <div style={{fontFamily:TYPE.display,fontSize:22,color:p.ink,letterSpacing:'-0.02em'}}>{w.weight} <span style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft}}>lbs</span></div>
-              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:2}}>{fmtDate(w.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
+              <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                <span style={{fontFamily:TYPE.display,fontSize:22,color:p.ink,letterSpacing:'-0.02em'}}>{w.weight}</span>
+                <span style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft}}>lbs</span>
+                {delta!==null&&delta!==0&&<Delta value={delta} unit=" lbs" p={p} invert style={{fontSize:11}}/>}
+              </div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:1}}>{fmtDate(w.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
             </div>
-          </div>
-        ))}
+          </div>;
+        })}
       </Card>
     </div></>}
   </div>;
@@ -1107,11 +1328,16 @@ function VitalApp(){
   const [paletteKey,setPaletteKey]=React.useState(()=>loadStore()?.palette||'cream');
   const [tab,setTab]=React.useState('today');
   const [logOpen,setLogOpen]=React.useState(false);
-  const [savedFlash,setSavedFlash]=React.useState(false);
+  const [actionOpen,setActionOpen]=React.useState(false);
+  const [logWeightOpen,setLogWeightOpen]=React.useState(false);
+  const [logWaterOpen,setLogWaterOpen]=React.useState(false);
+  const [savedFlash,setSavedFlash]=React.useState('');
   const p=PALETTES[paletteKey]||PALETTES.cream;
   const tabs=[{key:'today',label:'Today',icon:Icons.Home},{key:'levels',label:'Levels',icon:Icons.Wave},{key:'weight',label:'Weight',icon:Icons.Scale},{key:'settings',label:'Settings',icon:Icons.Gear}];
 
-  function onSaveShot(ns){setStore(ns);setLogOpen(false);setSavedFlash(true);setTimeout(()=>setSavedFlash(false),2000);}
+  function onSaveShot(ns){setStore(ns);setLogOpen(false);setSavedFlash('Shot logged');setTimeout(()=>setSavedFlash(''),2000);}
+  function onSaveWeight(ns){setStore(ns);setLogWeightOpen(false);setSavedFlash('Weight saved');setTimeout(()=>setSavedFlash(''),2000);}
+  function onSaveWater(ns){setStore(ns);setLogWaterOpen(false);setSavedFlash('Water logged');setTimeout(()=>setSavedFlash(''),2000);}
   function onUpdate(ns){setStore(ns);if(ns.palette)setPaletteKey(ns.palette);}
 
   if(!store)return <Onboarding p={p} onComplete={s=>{setStore(s);setPaletteKey(s.palette||'cream');}}/>;
@@ -1119,15 +1345,22 @@ function VitalApp(){
   return <div style={{position:'absolute',inset:0,background:p.bg,color:p.ink,fontFamily:TYPE.ui,overflow:'hidden'}}>
     <div style={{height:'env(safe-area-inset-top)'}}/>
     <div style={{position:'absolute',top:'env(safe-area-inset-top)',bottom:0,left:0,right:0,overflowY:'auto'}}>
-      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={()=>setLogOpen(true)} onGoTab={setTab} onUpdate={onUpdate}/>}
+      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={()=>setLogOpen(true)} onGoTab={setTab} onUpdate={onUpdate} onLogWeight={()=>setLogWeightOpen(true)}/>}
       {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={onUpdate}/>}
-      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={onUpdate}/>}
+      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={onUpdate} onLogWeight={()=>setLogWeightOpen(true)}/>}
       {tab==='settings'&&<ScreenSettings p={p} store={store} onUpdate={onUpdate} onPaletteChange={k=>setPaletteKey(k)}/>}
     </div>
-    <TabBar p={p} tabs={tabs} active={tab} onTab={setTab} onLogShot={()=>setLogOpen(true)}/>
+    <TabBar p={p} tabs={tabs} active={tab} onTab={setTab} onAction={()=>setActionOpen(true)}/>
+    {actionOpen&&<QuickActionSheet p={p}
+      onShot={()=>{setActionOpen(false);setLogOpen(true);}}
+      onWeight={()=>{setActionOpen(false);setLogWeightOpen(true);}}
+      onWater={()=>{setActionOpen(false);setLogWaterOpen(true);}}
+      onClose={()=>setActionOpen(false)}/>}
     {logOpen&&<ScreenLog p={p} store={store} onClose={()=>setLogOpen(false)} onSave={onSaveShot}/>}
+    {logWeightOpen&&<LogWeightSheet p={p} store={store} onSave={onSaveWeight} onClose={()=>setLogWeightOpen(false)}/>}
+    {logWaterOpen&&<LogWaterSheet p={p} store={store} onSave={onSaveWater} onClose={()=>setLogWaterOpen(false)}/>}
     {savedFlash&&<div style={{position:'absolute',top:'calc(env(safe-area-inset-top) + 16px)',left:'50%',transform:'translateX(-50%)',background:p.primary,color:p.primaryInk,padding:'10px 18px',borderRadius:R.pill,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:8,boxShadow:`0 8px 24px ${p.ink}25`,zIndex:400,animation:'flashIn 0.3s ease',whiteSpace:'nowrap'}}>
-      <Icons.Check size={16} color={p.primaryInk}/> Shot logged
+      <Icons.Check size={16} color={p.primaryInk}/> {savedFlash}
     </div>}
   </div>;
 }
