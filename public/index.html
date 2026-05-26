@@ -750,6 +750,13 @@ function ScreenLog({p,store,onClose,onSave}){
   const [feeling,setFeeling]=React.useState(2);
   const [logWeight,setLogWeight]=React.useState(false);
   const [weight,setWeight]=React.useState('');
+  // Date/time — default to now, editable
+  const nowDate=new Date();
+  const localDateStr=`${nowDate.getFullYear()}-${String(nowDate.getMonth()+1).padStart(2,'0')}-${String(nowDate.getDate()).padStart(2,'0')}`;
+  const localTimeStr=`${String(nowDate.getHours()).padStart(2,'0')}:${String(nowDate.getMinutes()).padStart(2,'0')}`;
+  const [shotDate,setShotDate]=React.useState(localDateStr);
+  const [shotTime,setShotTime]=React.useState(localTimeStr);
+
   const allSites=['L. Abdomen','R. Abdomen','L. Thigh','R. Thigh','L. Arm','R. Arm'];
   const recentSites=store.shots.slice(-6).map(s=>s.site);
   const siteCount=s=>recentSites.filter(r=>r===s).length;
@@ -762,8 +769,9 @@ function ScreenLog({p,store,onClose,onSave}){
 
   function handleSave(){
     if(!med||!doseNum)return;
-    const newShot={id:`shot_${Date.now()}`,medId:med.id,dose:doseNum,unit:med.unit,date:new Date().toISOString(),site,notes:`Feeling: ${moodLabels[feeling]}`,weight:logWeight&&weight?parseFloat(weight):null};
-    const newStore={...store,shots:[...store.shots,newShot],weights:logWeight&&weight?[...store.weights,{id:`wt_${Date.now()}`,weight:parseFloat(weight),date:new Date().toISOString().slice(0,10),notes:'Logged with shot'}]:store.weights};
+    const shotDateTime=new Date(`${shotDate}T${shotTime}:00`).toISOString();
+    const newShot={id:`shot_${Date.now()}`,medId:med.id,dose:doseNum,unit:med.unit,date:shotDateTime,site,notes:`Feeling: ${moodLabels[feeling]}`,weight:logWeight&&weight?parseFloat(weight):null};
+    const newStore={...store,shots:[...store.shots,newShot].sort((a,b)=>new Date(a.date)-new Date(b.date)),weights:logWeight&&weight?[...store.weights,{id:`wt_${Date.now()}`,weight:parseFloat(weight),date:shotDate,notes:'Logged with shot'}]:store.weights};
     newStore.meds=store.meds.map(m=>m.id===med.id?{...m,currentDose:doseNum}:m);
     saveStore(newStore);onSave(newStore);
   }
@@ -781,7 +789,10 @@ function ScreenLog({p,store,onClose,onSave}){
       <div style={{marginBottom:24}}>
         <Eyebrow p={p}>Logging</Eyebrow>
         <div style={{fontFamily:TYPE.display,fontSize:34,color:p.ink,letterSpacing:'-0.025em',lineHeight:0.95,marginTop:6}}>{med?.name||'Injection'}</div>
-        <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.inkSoft,marginTop:4}}>{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})} · {new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          <input type="date" value={shotDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setShotDate(e.target.value)} style={{flex:1,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+          <input type="time" value={shotTime} onChange={e=>setShotTime(e.target.value)} style={{width:110,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+        </div>
       </div>
 
       {/* Dose */}
