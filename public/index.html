@@ -118,7 +118,16 @@ function daysUntil(date,atTime=Date.now()){
   const diff=(new Date(date).getTime()-atTime)/86400000;
   return diff>=0?Math.ceil(diff):Math.floor(diff);
 }
-function fmtDate(d,opts){return new Date(d).toLocaleDateString('en-US',opts||{month:'short',day:'numeric'})}
+function fmtDate(d,opts){
+  // If it's a date-only string (YYYY-MM-DD), parse it as local time to avoid UTC shift
+  const date=typeof d==='string'&&d.length===10?new Date(d+'T12:00:00'):new Date(d);
+  return date.toLocaleDateString('en-US',opts||{month:'short',day:'numeric'});
+}
+// Always returns today's date as YYYY-MM-DD in LOCAL timezone (not UTC)
+function localToday(){
+  const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 // ═══════════════════════════════════════════════
 // ICONS
@@ -282,7 +291,7 @@ function MedSetupForm({p,initialMed,onSave,onCancel,title="Set up medication"}){
       syringeUnits:isUnits?syrNum:null,
       scheduleDays:useSpecificDays?scheduleDays:[],
       scheduleIntervalDays:useSpecificDays?7:scheduleInterval,
-      startedDate:initialMed?.startedDate||new Date().toISOString().slice(0,10),
+      startedDate:initialMed?.startedDate||localToday(),
     };
     onSave(med);
   }
@@ -398,14 +407,13 @@ function Onboarding({p,onComplete}){
   const [showMedForm,setShowMedForm]=React.useState(false);
   const [startWeight,setStartWeight]=React.useState('');
   const [goalWeight,setGoalWeight]=React.useState('');
-  const [firstShotDate,setFirstShotDate]=React.useState(new Date().toISOString().slice(0,10));
+  const [firstShotDate,setFirstShotDate]=React.useState(localToday());
 
   function handleMedSave(m){setMed(m);setShowMedForm(false);setStep(2);}
 
   function handleFinish(){
     const medId=med?.id||`med_${Date.now()}`;
-    const shotDate=new Date(firstShotDate);
-    shotDate.setHours(9,0,0,0);
+    const shotDate=new Date(`${firstShotDate}T12:00:00`);
     const store={
       ...emptyStore(),
       userName:name.trim(),
@@ -438,7 +446,7 @@ function Onboarding({p,onComplete}){
       </button>,
       canAdvance:!!med},
     {title:<>When was your <span style={{fontStyle:'italic',color:p.accent}}>last shot?</span></>,sub:"We'll use this to calculate your current drug level right now.",
-      content:<input type="date" value={firstShotDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setFirstShotDate(e.target.value)} style={{width:'100%',padding:'14px 16px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>,
+      content:<input type="date" value={firstShotDate} max={localToday()} onChange={e=>setFirstShotDate(e.target.value)} style={{width:'100%',padding:'14px 16px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>,
       canAdvance:!!firstShotDate},
     {title:<>Weight <span style={{fontStyle:'italic',color:p.accent}}>goal</span></>,sub:'Optional — helps track progress and project your goal date.',
       content:<><InputField label="Starting weight" value={startWeight} onChange={setStartWeight} type="number" p={p} placeholder="lbs" suffix="lbs"/><InputField label="Goal weight" value={goalWeight} onChange={setGoalWeight} type="number" p={p} placeholder="lbs" suffix="lbs"/></>,
@@ -499,7 +507,7 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
       <div style={{marginBottom:16}}>
         <Eyebrow p={p} style={{marginBottom:8}}>Date & time</Eyebrow>
         <div style={{display:'flex',gap:8}}>
-          <input type="date" value={date} max={new Date().toISOString().slice(0,10)} onChange={e=>setDate(e.target.value)} style={{flex:1,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+          <input type="date" value={date} max={localToday()} onChange={e=>setDate(e.target.value)} style={{flex:1,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
           <input type="time" value={time} onChange={e=>setTime(e.target.value)} style={{width:110,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
         </div>
       </div>
@@ -632,7 +640,7 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
 
     {/* Water glance */}
     {(()=>{
-      const today=new Date().toISOString().slice(0,10);
+      const today=localToday();
       const waterGoal=store.waterGoalOz||64;
       const todayWater=store.water?.find(w=>w.date===today);
       const oz=todayWater?.oz||0;
@@ -743,7 +751,7 @@ function ScreenLevels({p,store,onUpdate}){
           </div>
         </div>
         <div style={{padding:'0 22px 8px',display:'flex',gap:6,flexWrap:'wrap'}}>
-          {[14,28,60].map(d=><Chip key={d} p={p} active={range===d} onClick={()=>setRange(d)}>{d===60?'All':`${d} days`}</Chip>)}
+          {[14,28,60,90].map(d=><Chip key={d} p={p} active={range===d} onClick={()=>setRange(d)}>{d===90?'3 mo':`${d}d`}</Chip>)}
         </div>
         <div style={{padding:'0 14px 8px'}}>
           <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
@@ -776,7 +784,7 @@ function ScreenLevels({p,store,onUpdate}){
     {store.shots.length>0&&<><div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Shot history</Eyebrow></div>
     <div style={{padding:'0 16px 16px'}}>
       <Card p={p} padding={0}>
-        {[...store.shots].slice(-6).reverse().map((s,i,arr)=>{
+        {[...store.shots].reverse().map((s,i,arr)=>{
           const mgEff=med?effectiveMg(s,med):s.dose;
           return <button key={s.id} onClick={()=>setEditingShot(s)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`,background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
             <div style={{width:36,height:36,borderRadius:18,background:p.primarySoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Pill size={16} color={p.primary}/></div>
@@ -786,7 +794,7 @@ function ScreenLevels({p,store,onUpdate}){
                 {s.unit!=='mg'&&<span style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginLeft:6}}>= {mgEff.toFixed(2)} mg</span>}
                 {' · '}{s.site}
               </div>
-              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.05em',marginTop:2}}>{fmtDate(s.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.05em',marginTop:2}}>{fmtDate(s.date,{weekday:'short',month:'short',day:'numeric',year:'numeric'}).toUpperCase()}</div>
             </div>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
@@ -808,7 +816,7 @@ function ScreenLevels({p,store,onUpdate}){
 // ═══════════════════════════════════════════════
 function LogWeightSheet({p,store,onSave,onClose}){
   const [weight,setWeight]=React.useState('');
-  const [date,setDate]=React.useState(new Date().toISOString().slice(0,10));
+  const [date,setDate]=React.useState(localToday());
   function handleSave(){
     const w=parseFloat(weight);
     if(isNaN(w)||w<50||w>700)return;
@@ -832,7 +840,7 @@ function LogWeightSheet({p,store,onSave,onClose}){
       </div>
       <div style={{marginBottom:14}}>
         <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Date</div>
-        <input type="date" value={date} max={new Date().toISOString().slice(0,10)} onChange={e=>setDate(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
+        <input type="date" value={date} max={localToday()} onChange={e=>setDate(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
       </div>
       <div style={{marginBottom:20}}>
         <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Weight (lbs)</div>
@@ -849,7 +857,7 @@ function LogWeightSheet({p,store,onSave,onClose}){
 // LOG WATER SHEET
 // ═══════════════════════════════════════════════
 function LogWaterSheet({p,store,onSave,onClose}){
-  const today=new Date().toISOString().slice(0,10);
+  const today=localToday();
   const todayEntry=store.water?.find(w=>w.date===today);
   const [oz,setOz]=React.useState(String(todayEntry?.oz||''));
   const goal=store.waterGoalOz||64;
@@ -905,11 +913,36 @@ function LogWaterSheet({p,store,onSave,onClose}){
   </div>;
 }
 
+function EditWeightForm({p,entry,onSave,onDelete,onClose}){
+  const [weight,setWeight]=React.useState(String(entry.weight));
+  const [date,setDate]=React.useState(entry.date);
+  const [confirmDelete,setConfirmDelete]=React.useState(false);
+  return <>
+    <div style={{marginBottom:14}}>
+      <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Date</div>
+      <input type="date" value={date} max={localToday()} onChange={e=>setDate(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
+    </div>
+    <div style={{marginBottom:20}}>
+      <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Weight (lbs)</div>
+      <input type="number" value={weight} onChange={e=>setWeight(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:22,color:p.ink,outline:'none'}}/>
+    </div>
+    <div style={{display:'flex',gap:8}}>
+      {confirmDelete
+        ?<><button onClick={()=>onDelete(entry.id)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Yes, delete</button>
+        <button onClick={()=>setConfirmDelete(false)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.bgInset,color:p.ink,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Cancel</button></>
+        :<><button onClick={()=>setConfirmDelete(true)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
+        <PillBtn p={p} kind="primary" onClick={()=>onSave({...entry,weight:parseFloat(weight),date})} disabled={!weight} style={{flex:1}}>Save changes</PillBtn></>
+      }
+    </div>
+  </>;
+}
+
 // ═══════════════════════════════════════════════
 // SCREEN: WEIGHT
 // ═══════════════════════════════════════════════
 function ScreenWeight({p,store,onUpdate,onLogWeight}){
   const NOW=Date.now();
+  const [editingWeight,setEditingWeight]=React.useState(null);
   const wts=(store.weights||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
   const current=wts.length?wts[wts.length-1].weight:null;
   const start=store.startWeight,goal=store.goalWeight;
@@ -923,7 +956,7 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
   const goalDate=weeksToGoal?new Date(NOW+weeksToGoal*7*86400000):null;
 
   // Today's water
-  const today=new Date().toISOString().slice(0,10);
+  const today=localToday();
   const todayWater=store.water?.find(w=>w.date===today);
   const waterGoal=store.waterGoalOz||64;
   const waterOz=todayWater?.oz||0;
@@ -1041,10 +1074,10 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
     {wts.length>0&&<><div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>History</Eyebrow></div>
     <div style={{padding:'0 16px 16px'}}>
       <Card p={p} padding={0}>
-        {[...wts].slice(-8).reverse().map((w,i,arr)=>{
+        {[...wts].reverse().map((w,i,arr)=>{
           const prev=arr[i+1];
           const delta=prev?+(w.weight-prev.weight).toFixed(1):null;
-          return <div key={w.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`}}>
+          return <button key={w.id} onClick={()=>setEditingWeight(w)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`,background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
             <div style={{width:36,height:36,borderRadius:18,background:p.weightSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Weight size={16} color={p.weight}/></div>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'baseline',gap:8}}>
@@ -1052,12 +1085,34 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
                 <span style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft}}>lbs</span>
                 {delta!==null&&delta!==0&&<Delta value={delta} unit=" lbs" p={p} invert style={{fontSize:11}}/>}
               </div>
-              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:1}}>{fmtDate(w.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:1}}>{fmtDate(w.date,{weekday:'short',month:'short',day:'numeric',year:'numeric'}).toUpperCase()}</div>
             </div>
-          </div>;
+            <Icons.Edit size={13} color={p.inkMuted}/>
+          </button>;
         })}
       </Card>
     </div></>}
+    {editingWeight&&<div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+      <div onClick={()=>setEditingWeight(null)} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
+      <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+        <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>Edit entry</div>
+          <button onClick={()=>setEditingWeight(null)} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+        </div>
+        <EditWeightForm p={p} entry={editingWeight}
+          onSave={updated=>{
+            const ns={...store,weights:store.weights.map(w=>w.id===updated.id?updated:w).sort((a,b)=>a.date.localeCompare(b.date))};
+            saveStore(ns);onUpdate(ns);setEditingWeight(null);
+          }}
+          onDelete={id=>{
+            const ns={...store,weights:store.weights.filter(w=>w.id!==id)};
+            saveStore(ns);onUpdate(ns);setEditingWeight(null);
+          }}
+          onClose={()=>setEditingWeight(null)}
+        />
+      </div>
+    </div>}
   </div>;
 }
 
@@ -1112,7 +1167,7 @@ function ScreenLog({p,store,onClose,onSave}){
         <Eyebrow p={p}>Logging</Eyebrow>
         <div style={{fontFamily:TYPE.display,fontSize:34,color:p.ink,letterSpacing:'-0.025em',lineHeight:0.95,marginTop:6}}>{med?.name||'Injection'}</div>
         <div style={{display:'flex',gap:8,marginTop:10}}>
-          <input type="date" value={shotDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setShotDate(e.target.value)} style={{flex:1,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+          <input type="date" value={shotDate} max={localToday()} onChange={e=>setShotDate(e.target.value)} style={{flex:1,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
           <input type="time" value={shotTime} onChange={e=>setShotTime(e.target.value)} style={{width:110,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
         </div>
       </div>
@@ -1285,6 +1340,22 @@ function ScreenSettings({p,store,onUpdate,onPaletteChange}){
             <button key={key} onClick={()=>{const u={...store,palette:key};saveStore(u);onUpdate(u);onPaletteChange(key);}} style={{flex:1,padding:'12px 8px',borderRadius:R.md,background:store.palette===key?p.primary:pal.bgElev,color:store.palette===key?p.primaryInk:pal.ink,border:`1px solid ${store.palette===key?p.primary:p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{pal.name}</button>
           ))}
         </div>
+      </Card>
+    </div>
+
+    {/* Water goal */}
+    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Water</Eyebrow></div>
+    <div style={{padding:'0 16px 14px'}}>
+      <Card p={p} padding={16}>
+        <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500,marginBottom:10}}>Daily water goal</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
+          {[48,64,80,96,128].map(oz=>(
+            <button key={oz} onClick={()=>{const u={...store,waterGoalOz:oz};saveStore(u);onUpdate(u);}} style={{flex:'1 1 50px',padding:'10px 4px',borderRadius:R.md,background:(store.waterGoalOz||64)===oz?p.ink:p.bgInset,color:(store.waterGoalOz||64)===oz?p.bgElev:p.ink,border:`0.5px solid ${(store.waterGoalOz||64)===oz?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>
+              {oz} oz
+            </button>
+          ))}
+        </div>
+        <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted}}>Current goal: {store.waterGoalOz||64} oz/day ({Math.round((store.waterGoalOz||64)/8)} cups)</div>
       </Card>
     </div>
 
