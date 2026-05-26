@@ -101,21 +101,23 @@ function nextShotDate(store,atTime=Date.now()){
   const med=store.meds[0];if(!med)return null;
   const shots=store.shots.filter(s=>s.medId===med.id);
   if(!shots.length)return new Date(atTime);
-  const lastT=new Date(shots[shots.length-1].date).getTime();
-  // specific days schedule
+  const lastShot=new Date(shots[shots.length-1].date);
+  const lastT=lastShot.getTime();
   if(med.scheduleDays&&med.scheduleDays.length>0){
-    const last=new Date(shots[shots.length-1].date);
-    const lastDow=last.getDay();
+    const lastDow=lastShot.getDay();
     const days=med.scheduleDays.slice().sort((a,b)=>a-b);
-    // find next day after lastDow
+    // Find the next scheduled day STRICTLY after lastDow
     let nextDow=days.find(d=>d>lastDow);
-    if(nextDow===undefined)nextDow=days[0];
-    const diff=((nextDow-lastDow)+7)%7||7;
+    if(nextDow===undefined)nextDow=days[0]; // wrap to next week
+    const diff=nextDow>lastDow ? nextDow-lastDow : (7-lastDow)+nextDow;
     return new Date(lastT+diff*86400000);
   }
   return new Date(lastT+(med.scheduleIntervalDays||7)*86400000);
 }
-function daysUntil(date,atTime=Date.now()){return Math.ceil((new Date(date).getTime()-atTime)/86400000)}
+function daysUntil(date,atTime=Date.now()){
+  const diff=(new Date(date).getTime()-atTime)/86400000;
+  return diff>=0?Math.ceil(diff):Math.floor(diff);
+}
 function fmtDate(d,opts){return new Date(d).toLocaleDateString('en-US',opts||{month:'short',day:'numeric'})}
 
 // ═══════════════════════════════════════════════
@@ -435,10 +437,88 @@ function Onboarding({p,onComplete}){
 }
 
 // ═══════════════════════════════════════════════
+// EDIT SHOT SHEET
+// ═══════════════════════════════════════════════
+function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
+  const d=new Date(shot.date);
+  const localDate=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const localTime=`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  const [dose,setDose]=React.useState(String(shot.dose));
+  const [date,setDate]=React.useState(localDate);
+  const [time,setTime]=React.useState(localTime);
+  const [site,setSite]=React.useState(shot.site||'L. Abdomen');
+  const [confirmDelete,setConfirmDelete]=React.useState(false);
+  const allSites=['L. Abdomen','R. Abdomen','L. Thigh','R. Thigh','L. Arm','R. Arm'];
+  const doseNum=parseFloat(dose)||0;
+  const mgEff=med&&doseNum?effectiveMg({dose:doseNum,unit:shot.unit},med):doseNum;
+  const showMg=shot.unit!=='mg'&&doseNum>0;
+
+  function handleSave(){
+    const newDate=new Date(`${date}T${time}:00`).toISOString();
+    onSave({...shot,dose:doseNum,date:newDate,site});
+  }
+
+  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
+      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink,letterSpacing:'-0.02em'}}>Edit shot</div>
+        <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:p.inkMuted,padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+      </div>
+
+      {/* Date & Time */}
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Date & time</Eyebrow>
+        <div style={{display:'flex',gap:8}}>
+          <input type="date" value={date} max={new Date().toISOString().slice(0,10)} onChange={e=>setDate(e.target.value)} style={{flex:1,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+          <input type="time" value={time} onChange={e=>setTime(e.target.value)} style={{width:110,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+        </div>
+      </div>
+
+      {/* Dose */}
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Dose ({shot.unit})</Eyebrow>
+        {med?.formulation==='pen'
+          ?<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {[2.5,5,7.5,10,12.5,15].map(d=>(
+              <button key={d} onClick={()=>setDose(String(d))} style={{flex:'1 1 50px',padding:'10px 4px',borderRadius:R.md,background:dose===String(d)?p.ink:p.bgInset,color:dose===String(d)?p.bgElev:p.ink,border:`0.5px solid ${dose===String(d)?'transparent':p.line}`,fontFamily:TYPE.display,fontSize:16,cursor:'pointer'}}>{d}</button>
+            ))}
+          </div>
+          :<input type="number" value={dose} onChange={e=>setDose(e.target.value)} style={{width:'100%',padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
+        }
+        {showMg&&doseNum>0&&<div style={{marginTop:6,fontFamily:TYPE.mono,fontSize:11,color:p.primary}}>= {mgEff.toFixed(2)} mg active drug</div>}
+      </div>
+
+      {/* Site */}
+      <div style={{marginBottom:20}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Injection site</Eyebrow>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {allSites.map(s=>(
+            <button key={s} onClick={()=>setSite(s)} style={{padding:'7px 12px',borderRadius:R.pill,background:site===s?p.ink:p.bgInset,color:site===s?p.bgElev:p.ink,border:`0.5px solid ${site===s?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',whiteSpace:'nowrap'}}>{s}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{display:'flex',gap:8}}>
+        {confirmDelete
+          ?<><button onClick={()=>onDelete(shot.id)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Yes, delete</button>
+          <button onClick={()=>setConfirmDelete(false)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.bgInset,color:p.ink,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Cancel</button></>
+          :<><button onClick={()=>setConfirmDelete(true)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
+          <PillBtn p={p} kind="primary" onClick={handleSave} disabled={!doseNum} style={{flex:1}}>Save changes</PillBtn></>
+        }
+      </div>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════
 // SCREEN: TODAY
 // ═══════════════════════════════════════════════
-function ScreenToday({p,store,onLogShot,onGoTab}){
+function ScreenToday({p,store,onLogShot,onGoTab,onUpdate}){
   const NOW=Date.now();
+  const [editingShot,setEditingShot]=React.useState(null);
   const level=getCurrentLevel(store,NOW);
   const peak=getPeakLevel(store);
   const next=nextShotDate(store,NOW);
@@ -450,6 +530,15 @@ function ScreenToday({p,store,onLogShot,onGoTab}){
   const wkDelta=todayW&&weekAgo?+(todayW-weekAgo).toFixed(1):null;
   const totalLost=store.startWeight&&todayW?+(store.startWeight-todayW).toFixed(1):null;
   const med=store.meds[0];
+
+  function handleEditSave(updated){
+    const newStore={...store,shots:store.shots.map(s=>s.id===updated.id?updated:s).sort((a,b)=>new Date(a.date)-new Date(b.date))};
+    saveStore(newStore);onUpdate(newStore);setEditingShot(null);
+  }
+  function handleDelete(id){
+    const newStore={...store,shots:store.shots.filter(s=>s.id!==id)};
+    saveStore(newStore);onUpdate(newStore);setEditingShot(null);
+  }
 
   return <div style={{padding:'8px 0 110px',fontFamily:TYPE.ui,color:p.ink,background:p.bg,minHeight:'100%'}}>
     <div style={{padding:'0 22px 4px'}}><Eyebrow p={p}>{todayLabel}</Eyebrow></div>
@@ -480,10 +569,10 @@ function ScreenToday({p,store,onLogShot,onGoTab}){
             {next&&<div style={{marginTop:16}}>
               <div style={{fontFamily:TYPE.mono,fontSize:9,opacity:0.6,letterSpacing:'0.14em',marginBottom:4}}>NEXT SHOT</div>
               <div style={{display:'flex',alignItems:'baseline',gap:6}}>
-                <span style={{fontFamily:TYPE.display,fontSize:28}}>{dleft===0?'Today':dleft===1?'1 day':`${dleft}d`}</span>
-                {dleft!==0&&<span style={{fontFamily:TYPE.ui,fontSize:11,opacity:0.7}}>{fmtDate(next,{weekday:'short',month:'short',day:'numeric'})}</span>}
+                <span style={{fontFamily:TYPE.display,fontSize:28}}>{dleft===0?'Today':dleft===1?'Tomorrow':dleft>1?`In ${dleft}d`:'Overdue'}</span>
+                {dleft>0&&dleft!==1&&<span style={{fontFamily:TYPE.ui,fontSize:11,opacity:0.7}}>{fmtDate(next,{weekday:'short',month:'short',day:'numeric'})}</span>}
               </div>
-              {dleft<=0&&<div style={{marginTop:8,display:'inline-flex',alignItems:'center',gap:6,padding:'5px 10px',borderRadius:R.pill,background:`${p.warn}25`,color:p.warn,fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.08em'}}>⏰ Shot due</div>}
+              {dleft<=0&&<div style={{marginTop:8,display:'inline-flex',alignItems:'center',gap:6,padding:'5px 10px',borderRadius:R.pill,background:`${p.warn}25`,color:p.warn,fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.08em'}}>⏰ Shot due{dleft<0?` (${Math.abs(dleft)}d ago)`:''}</div>}
             </div>}
           </div>
         </div>
@@ -522,7 +611,7 @@ function ScreenToday({p,store,onLogShot,onGoTab}){
         <Card p={p} padding={0}>
           {[...store.shots].slice(-3).reverse().map((s,i,arr)=>{
             const mgEff=med?effectiveMg(s,med):s.dose;
-            return <div key={s.id} style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`}}>
+            return <button key={s.id} onClick={()=>setEditingShot(s)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`,background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
               <div style={{width:36,height:36,borderRadius:18,background:p.primarySoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Pill size={16} color={p.primary}/></div>
               <div style={{flex:1}}>
                 <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>
@@ -532,20 +621,25 @@ function ScreenToday({p,store,onLogShot,onGoTab}){
                 </div>
                 <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.05em',marginTop:2}}>{fmtDate(s.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
               </div>
-              <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
-            </div>;
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
+                <Icons.Edit size={13} color={p.inkMuted}/>
+              </div>
+            </button>;
           })}
         </Card>
       </div>
     </>}
+    {editingShot&&<EditShotSheet p={p} shot={editingShot} med={med} onSave={handleEditSave} onDelete={handleDelete} onClose={()=>setEditingShot(null)}/>}
   </div>;
 }
 
 // ═══════════════════════════════════════════════
 // SCREEN: LEVELS
 // ═══════════════════════════════════════════════
-function ScreenLevels({p,store}){
+function ScreenLevels({p,store,onUpdate}){
   const [range,setRange]=React.useState(28);
+  const [editingShot,setEditingShot]=React.useState(null);
   const NOW=Date.now();
   const futureDays=14;
   const W=358,H=200,padL=8,padR=8,padT=12,padB=24,plotW=W-padL-padR,plotH=H-padT-padB;
@@ -622,7 +716,7 @@ function ScreenLevels({p,store}){
       <Card p={p} padding={0}>
         {[...store.shots].slice(-6).reverse().map((s,i,arr)=>{
           const mgEff=med?effectiveMg(s,med):s.dose;
-          return <div key={s.id} style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`}}>
+          return <button key={s.id} onClick={()=>setEditingShot(s)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderBottom:i===arr.length-1?'none':`0.5px solid ${p.lineSoft}`,background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
             <div style={{width:36,height:36,borderRadius:18,background:p.primarySoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Pill size={16} color={p.primary}/></div>
             <div style={{flex:1}}>
               <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>
@@ -632,11 +726,18 @@ function ScreenLevels({p,store}){
               </div>
               <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.05em',marginTop:2}}>{fmtDate(s.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}</div>
             </div>
-            <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
-          </div>;
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
+              <Icons.Edit size={13} color={p.inkMuted}/>
+            </div>
+          </button>;
         })}
       </Card>
     </div></>}
+    {editingShot&&<EditShotSheet p={p} shot={editingShot} med={med}
+      onSave={updated=>{const ns={...store,shots:store.shots.map(s=>s.id===updated.id?updated:s).sort((a,b)=>new Date(a.date)-new Date(b.date))};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
+      onDelete={id=>{const ns={...store,shots:store.shots.filter(s=>s.id!==id)};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
+      onClose={()=>setEditingShot(null)}/>}
   </div>;
 }
 
@@ -1018,8 +1119,8 @@ function VitalApp(){
   return <div style={{position:'absolute',inset:0,background:p.bg,color:p.ink,fontFamily:TYPE.ui,overflow:'hidden'}}>
     <div style={{height:'env(safe-area-inset-top)'}}/>
     <div style={{position:'absolute',top:'env(safe-area-inset-top)',bottom:0,left:0,right:0,overflowY:'auto'}}>
-      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={()=>setLogOpen(true)} onGoTab={setTab}/>}
-      {tab==='levels'&&<ScreenLevels p={p} store={store}/>}
+      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={()=>setLogOpen(true)} onGoTab={setTab} onUpdate={onUpdate}/>}
+      {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={onUpdate}/>}
       {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={onUpdate}/>}
       {tab==='settings'&&<ScreenSettings p={p} store={store} onUpdate={onUpdate} onPaletteChange={k=>setPaletteKey(k)}/>}
     </div>
