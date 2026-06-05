@@ -1,6 +1,6 @@
 # Vital · GLP-1 Tracker
 
-A private, browser-based GLP-1 injection and weight tracker. No server, no accounts, no ads. All data lives in your browser's localStorage.
+A private, browser-based GLP-1 injection, weight, and peptide tracker. No server, no accounts, no ads. All data lives in your browser's localStorage.
 
 ## Features
 
@@ -8,10 +8,11 @@ A private, browser-based GLP-1 injection and weight tracker. No server, no accou
 - **Drug Level Forecast** — Clinically accurate PK model (first-order absorption/elimination)
 - **Shot Log** — Dose, injection site rotation, mood, optional weight
 - **Weight Tracker** — Trend chart, goal progress, projected goal date
+- **Peptides** — Protocol tracker for short-acting peptides (Nuform); daily check-off, dose logging, injection site, timing, and weekly adherence grid
 - **Settings** — Export/import JSON backup, theme switcher (Cream / Graphite)
 - **PWA** — Add to Home Screen on iPhone/Android for a native app feel
 
-## Supported Medications
+## Supported GLP-1 Medications
 
 | Medication | Half-life | Tmax | Source |
 |---|---|---|---|
@@ -19,6 +20,16 @@ A private, browser-based GLP-1 injection and weight tracker. No server, no accou
 | Semaglutide | 7 days | 48 hr | FDA Ozempic/Wegovy label |
 | Retatrutide | 6 days | 48 hr | NEJM Phase 2 trial |
 | Liraglutide | 13 hours | 12 hr | FDA Victoza label |
+
+## Peptide Protocol (Nuform)
+
+| Peptide | Conversion | Default Dose | Schedule |
+|---|---|---|---|
+| Tesamorelin | 10 units = 1 mg | 10 units | 5x/week · Night fasted |
+| IGF-1 LR3 | 7.5 units = 25 mcg · 15 units = 50 mcg | 7.5 units | 5x/week · Pre or post workout |
+| CJC-1295 / Ipamorelin | 6 units = 200 mcg · 9 units = 300 mcg | 6 units | 5x/week · Morning or night fasted |
+
+Peptide data is stored separately under `vital_peptides_v1` in localStorage.
 
 ## Deploy to GitHub Pages
 
@@ -49,4 +60,4 @@ This is not a medical device. Drug level values are estimates based on populatio
 
 ---
 
-Built by Adrian Valencia · May 2026
+Built by Adrian Valencia · June 2026
