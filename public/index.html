@@ -53,53 +53,75 @@ const MEDS_DB={
   other:{name:"Other",brand:"",halfLifeDays:7,tmaxDays:2},
 };
 const STORAGE_KEY='glp1tracker_v3';
-const PEPTIDE_KEY='vital_peptides_v1';
+const PEPTIDE_KEY='vital_peptides_v2';
+const PEPTIDE_KEY_OLD='vital_peptides_v1';
 
 // ═══════════════════════════════════════════════
 // PEPTIDE DATA
+// Concentration is derived from the real vial: (vialMg / bacMl) / syringeUnits = mg per unit.
+// Doses are stored in syringe units; display converts to mg or mcg per the label.
+// PK params are in HOURS (peptides act on a much faster scale than GLP-1).
 // ═══════════════════════════════════════════════
 const DEFAULT_PEPTIDES=[
   {
     id:"tesamorelin",
     name:"Tesamorelin",
-    source:"Nuform",
-    concentration:1,
-    syringeUnits:10,
-    defaultDose:10,
+    vialMg:10, bacMl:1, syringeUnits:100,        // 10 mg/mL -> 0.10 mg/unit
+    doseUnit:"mg",
+    defaultDose:10,                              // units
     doseOptions:[10],
     doseLabel:"10 units = 1 mg",
-    timingLabel:"At Night · Fasted",
-    scheduleDays:[1,2,3,4,5],
+    timingLabel:"Night · Fasted",
+    defaultTiming:"night",
+    weeklyTarget:5,
+    halfLifeHours:0.55, tmaxHours:0.25, chartHours:24, dayScale:false,
+    levelNote:"Clears within a few hours (half-life ~30 min). The GH pulse it triggers lasts far longer than the peptide itself.",
     color:"#2E7D52",
-    notes:"Fasted before bed",
   },
   {
     id:"igf1lr3",
     name:"IGF-1 LR3",
-    source:"Nuform",
-    concentration:0.3333,
-    syringeUnits:7.5,
+    vialMg:1, bacMl:3, syringeUnits:100,         // 0.333 mg/mL -> 3.33 mcg/unit
+    doseUnit:"mcg",
     defaultDose:7.5,
     doseOptions:[7.5,15],
     doseLabel:"7.5 units = 25 mcg · 15 units = 50 mcg",
-    timingLabel:"Pre or Post Workout",
-    scheduleDays:[1,2,3,4,5],
+    timingLabel:"Around Workout",
+    defaultTiming:"post_workout",
+    weeklyTarget:5,
+    halfLifeHours:25, tmaxHours:6, chartHours:192, dayScale:true,
+    levelNote:"Long-acting (~20-30 h half-life) - the only one that accumulates across daily doses and shows a multi-day curve.",
     color:"#1A6B8A",
-    notes:"Before or after workout",
   },
   {
     id:"cjc_ipa",
     name:"CJC-1295 / Ipamorelin",
-    source:"Nuform",
-    concentration:0.3333,
-    syringeUnits:6,
+    vialMg:10, bacMl:3, syringeUnits:100,        // 3.33 mg/mL -> 33.3 mcg/unit
+    doseUnit:"mcg",
     defaultDose:6,
     doseOptions:[6,9],
     doseLabel:"6 units = 200 mcg · 9 units = 300 mcg",
-    timingLabel:"Morning or Night · Fasted",
-    scheduleDays:[1,2,3,4,5],
+    timingLabel:"AM or PM · Fasted",
+    defaultTiming:"morning",
+    weeklyTarget:5,
+    halfLifeHours:2, tmaxHours:0.5, chartHours:24, dayScale:false,
+    levelNote:"No-DAC blend. CJC clears in ~30 min, ipamorelin in ~2 h - the curve approximates the longer ipamorelin tail.",
     color:"#6B3D8A",
-    notes:"Morning or night fasted",
+  },
+  {
+    id:"motsc",
+    name:"MOTS-C",
+    vialMg:40, bacMl:2, syringeUnits:100,        // 20 mg/mL -> 0.20 mg/unit
+    doseUnit:"mg",
+    defaultDose:10,
+    doseOptions:[10,25],
+    doseLabel:"10 units = 2 mg · 25 units = 5 mg",
+    timingLabel:"Morning · Fasted",
+    defaultTiming:"morning",
+    weeklyTarget:3,
+    halfLifeHours:1.1, tmaxHours:0.4, chartHours:24, dayScale:false,
+    levelNote:"Clears in 1-2 h. The benefit comes from AMPK signaling it kicks off, which outlasts the molecule in your blood.",
+    color:"#B5532E",
   },
 ];
 
@@ -110,6 +132,7 @@ const TIMING_OPTIONS=[
   {value:"afternoon",label:"Afternoon"},
   {value:"night",label:"Night"},
 ];
+const TIMING_HOUR={morning:8,pre_workout:7,post_workout:18,afternoon:14,night:21};
 
 const INJECTION_SITES=['L. Abdomen','R. Abdomen','L. Thigh','R. Thigh','L. Arm','R. Arm'];
 
@@ -120,11 +143,18 @@ function loadStore(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON
 function saveStore(s){localStorage.setItem(STORAGE_KEY,JSON.stringify(s))}
 function emptyStore(){return{meds:[],shots:[],weights:[],startWeight:null,goalWeight:null,startDate:null,palette:'cream',userName:''}}
 
-function loadPeptideStore(){
-  try{const r=localStorage.getItem(PEPTIDE_KEY);return r?JSON.parse(r):{logs:[],peptides:DEFAULT_PEPTIDES}}
-  catch{return{logs:[],peptides:DEFAULT_PEPTIDES}}
+// Peptide logs only - peptide *config* always comes from DEFAULT_PEPTIDES (code-driven),
+// so protocol/dosing corrections roll out automatically. Migrates logs from v1 if present.
+function loadPeptideLogs(){
+  try{
+    const r=localStorage.getItem(PEPTIDE_KEY);
+    if(r){const d=JSON.parse(r);return Array.isArray(d.logs)?d.logs:[];}
+    const old=localStorage.getItem(PEPTIDE_KEY_OLD);
+    if(old){const d=JSON.parse(old);return Array.isArray(d.logs)?d.logs:[];}
+  }catch{}
+  return [];
 }
-function savePeptideStore(s){localStorage.setItem(PEPTIDE_KEY,JSON.stringify(s))}
+function savePeptideLogs(logs){localStorage.setItem(PEPTIDE_KEY,JSON.stringify({v:2,logs}));}
 
 function effectiveMg(shot,med){
   if(!shot||!med)return 0;
@@ -186,11 +216,30 @@ function localToday(){
   const d=new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
+function nowTimeStr(){const d=new Date();return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
 
-// Peptide helpers
-function unitsToMcg(units,peptide){
-  const mg=units*(peptide.concentration/peptide.syringeUnits);
-  return Math.round(mg*1000);
+// -- Peptide helpers --
+function mgPerUnit(pt){return (pt.vialMg/pt.bacMl)/pt.syringeUnits;}
+function unitsToMg(units,pt){return units*mgPerUnit(pt);}
+function unitsToMcg(units,pt){return Math.round(units*mgPerUnit(pt)*1000);}
+function fmtDose(units,pt){
+  if(pt.doseUnit==='mg'){const mg=unitsToMg(units,pt);return `${+mg.toFixed(mg<1?2:1)} mg`;}
+  return `${unitsToMcg(units,pt)} mcg`;
+}
+function fmtLevelVal(mg,pt){return pt.doseUnit==='mg'?(+mg.toFixed(2)).toString():String(Math.round(mg*1000));}
+function fmtHL(h){return h<1?`${Math.round(h*60)} min`:`${+h.toFixed(h<10?1:0)} h`;}
+function logInjectionMs(l,pt){
+  if(l.time)return new Date(`${l.date}T${l.time}:00`).getTime();
+  const h=TIMING_HOUR[l.timing]!=null?TIMING_HOUR[l.timing]:12;
+  return new Date(`${l.date}T${String(h).padStart(2,'0')}:00:00`).getTime();
+}
+function peptideLevelAt(logs,pt,atMs){
+  return logs.reduce((sum,l)=>{
+    if(l.peptideId!==pt.id)return sum;
+    const elapsedH=(atMs-logInjectionMs(l,pt))/3600000;
+    if(elapsedH<0)return sum;
+    return sum+singleShotLevel(unitsToMg(l.dose,pt),pt.halfLifeHours,pt.tmaxHours,elapsedH);
+  },0);
 }
 function getWeekDates(offsetWeeks=0){
   const today=new Date();
@@ -203,14 +252,9 @@ function getWeekDates(offsetWeeks=0){
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   });
 }
-function getAdherence(logs,peptideId,scheduleDays,weekOffset=0){
-  const weekDates=getWeekDates(weekOffset);
-  const scheduled=weekDates.filter(date=>{
-    const d=new Date(date+'T12:00:00');
-    return scheduleDays.includes(d.getDay());
-  });
-  const taken=scheduled.filter(date=>logs.some(l=>l.peptideId===peptideId&&l.date===date));
-  return{taken:taken.length,scheduled:scheduled.length};
+function getWeeklyCount(logs,peptideId,offsetWeeks=0){
+  const weekDates=getWeekDates(offsetWeeks);
+  return weekDates.filter(d=>logs.some(l=>l.peptideId===peptideId&&l.date===d)).length;
 }
 
 // ═══════════════════════════════════════════════
@@ -237,7 +281,7 @@ const Icons={
   X:IC(<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>),
   Wand:IC(<><path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M15 9h0M17.8 6.2 19 5m-3 21 9-9M12.2 6.2 11 5"/></>),
   Drop:IC(<><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></>),
-  // Peptide icon — flask/vial shape
+  Clock:IC(<><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></>),
   Flask:IC(<><path d="M9 3h6M10 3v5l-4 8a2 2 0 0 0 1.8 3h8.4a2 2 0 0 0 1.8-3l-4-8V3"/><line x1="8.5" y1="13" x2="15.5" y2="13"/></>),
 };
 
@@ -269,22 +313,22 @@ function Chip({children,p,active,style,onClick}){
   return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:R.pill,background:active?p.ink:'transparent',color:active?p.bgElev:p.ink,border:`0.5px solid ${active?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',...style}}>{children}</button>;
 }
 
-// Tab bar — now 5 tabs (Today, Levels, Peptides, Weight, Settings)
 function TabBar({tabs,active,onTab,p,onAction}){
   const left=tabs.slice(0,2);
   const right=tabs.slice(2);
   return <div style={{position:'absolute',bottom:0,left:0,right:0,paddingBottom:'max(28px,env(safe-area-inset-bottom))',paddingTop:8,background:`linear-gradient(to top,${p.bg} 60%,${p.bg}00)`,display:'flex',justifyContent:'space-around',alignItems:'center',zIndex:30}}>
-    {left.map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 8px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:52}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
+    {left.map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 6px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:48}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
     <button onClick={onAction} style={{width:54,height:54,borderRadius:27,background:p.ink,color:p.bgElev,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 8px 20px ${p.ink}40`,marginTop:-22,flexShrink:0}}><Icons.Plus size={22} color={p.bgElev}/></button>
-    {right.map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 8px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:52}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
+    {right.map(t=><button key={t.key} onClick={()=>onTab(t.key)} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,background:'none',border:'none',cursor:'pointer',padding:'6px 6px',color:active===t.key?p.ink:p.inkMuted,fontFamily:TYPE.ui,fontSize:10,fontWeight:500,minWidth:48}}><t.icon size={22} color="currentColor"/><span>{t.label}</span></button>)}
   </div>;
 }
 
-function QuickActionSheet({p,onShot,onWeight,onWater,onClose}){
+function QuickActionSheet({p,onShot,onPeptide,onWeight,onWater,onClose}){
   const actions=[
-    {label:'Log a shot',sub:'Injection dose & site',icon:Icons.Pill,color:p.primary,soft:p.primarySoft,fn:onShot},
-    {label:'Log weight',sub:"Today's weigh-in",icon:Icons.Weight,color:p.weight,soft:p.weightSoft,fn:onWeight},
-    {label:'Log water',sub:'Daily oz intake',icon:Icons.Wave,color:p.accent,soft:p.accentSoft,fn:onWater},
+    {label:'Log a shot',sub:'GLP-1 injection dose & site',icon:Icons.Pill,color:p.primary,soft:p.primarySoft,fn:onShot},
+    {label:'Log a peptide',sub:'Tesa · IGF-1 · CJC/Ipa · MOTS-C',icon:Icons.Flask,color:p.weight,soft:p.weightSoft,fn:onPeptide},
+    {label:'Log weight',sub:"Today's weigh-in",icon:Icons.Weight,color:p.accent,soft:p.accentSoft,fn:onWeight},
+    {label:'Log water',sub:'Daily oz intake',icon:Icons.Wave,color:p.success,soft:p.primarySoft,fn:onWater},
   ];
   return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
     <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
@@ -292,7 +336,7 @@ function QuickActionSheet({p,onShot,onWeight,onWater,onClose}){
       <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 20px'}}/>
       <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {actions.map(a=>(
-          <button key={a.label} onClick={a.fn} style={{display:'flex',alignItems:'center',gap:14,padding:'16px 18px',borderRadius:R.lg,background:p.bgInset,border:`0.5px solid ${p.line}`,cursor:'pointer',textAlign:'left'}}>
+          <button key={a.label} onClick={a.fn} style={{display:'flex',alignItems:'center',gap:14,padding:'15px 18px',borderRadius:R.lg,background:p.bgInset,border:`0.5px solid ${p.line}`,cursor:'pointer',textAlign:'left'}}>
             <div style={{width:42,height:42,borderRadius:21,background:a.soft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><a.icon size={20} color={a.color}/></div>
             <div>
               <div style={{fontFamily:TYPE.ui,fontSize:15,color:p.ink,fontWeight:500}}>{a.label}</div>
@@ -560,7 +604,7 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
   const [time,setTime]=React.useState(localTime);
   const [site,setSite]=React.useState(shot.site||'L. Abdomen');
   const [confirmDelete,setConfirmDelete]=React.useState(false);
-  const allSites=['L. Abdomen','R. Abdomen','L. Thigh','R. Thigh','L. Arm','R. Arm'];
+  const allSites=INJECTION_SITES;
   const doseNum=parseFloat(dose)||0;
   const mgEff=med&&doseNum?effectiveMg({dose:doseNum,unit:shot.unit},med):doseNum;
   const showMg=shot.unit!=='mg'&&doseNum>0;
@@ -879,136 +923,139 @@ function ScreenLevels({p,store,onUpdate}){
 }
 
 // ═══════════════════════════════════════════════
-// SCREEN: PEPTIDES
+// PEPTIDE LOG SHEET  (date + time = backdating + accurate PK; log on any day)
 // ═══════════════════════════════════════════════
-function ScreenPeptides({p}){
-  const [pData,setPData]=React.useState(()=>loadPeptideStore());
-  const {logs,peptides}=pData;
-  const [subView,setSubView]=React.useState('today');
-  const [logSheet,setLogSheet]=React.useState(null);
-  const [editLog,setEditLog]=React.useState(null);
-  const [weekOffset,setWeekOffset]=React.useState(0);
+function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
+  const today=localToday();
+  const isEdit=!!existingLog;
+  const [dose,setDose]=React.useState(existingLog?.dose||pt.defaultDose);
+  const [site,setSite]=React.useState(existingLog?.site||'');
+  const [timing,setTiming]=React.useState(existingLog?.timing||pt.defaultTiming||'morning');
+  const [date,setDate]=React.useState(existingLog?.date||today);
+  const [time,setTime]=React.useState(existingLog?.time||nowTimeStr());
+  const [confirmDelete,setConfirmDelete]=React.useState(false);
 
-  React.useEffect(()=>{savePeptideStore(pData);},[pData]);
+  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(36px,env(safe-area-inset-bottom))',maxHeight:'92vh',overflowY:'auto'}}>
+      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{width:9,height:9,borderRadius:5,background:pt.color}}/>
+          <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>{isEdit?'Edit log':pt.name}</div>
+        </div>
+        <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+      </div>
+      <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:20}}>{pt.weeklyTarget}×/week · {pt.timingLabel}</div>
+
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Date & time</Eyebrow>
+        <div style={{display:'flex',gap:8}}>
+          <input type="date" value={date} max={today} onChange={e=>setDate(e.target.value)} style={{flex:1,padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:15,color:p.ink,outline:'none'}}/>
+          <input type="time" value={time} onChange={e=>setTime(e.target.value)} style={{width:108,padding:'12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:15,color:p.ink,outline:'none'}}/>
+        </div>
+        {date!==today&&<div style={{fontFamily:TYPE.mono,fontSize:10,color:p.accent,marginTop:6,letterSpacing:'0.04em'}}>Backdated to {fmtDate(date,{weekday:'short',month:'short',day:'numeric'})}</div>}
+      </div>
+
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Dose</Eyebrow>
+        <div style={{display:'flex',gap:8}}>
+          {pt.doseOptions.map(opt=>(
+            <button key={opt} onClick={()=>setDose(opt)} style={{flex:1,padding:'14px 8px',borderRadius:R.md,background:dose===opt?p.ink:p.bgInset,color:dose===opt?p.bgElev:p.ink,border:`0.5px solid ${dose===opt?'transparent':p.line}`,cursor:'pointer',textAlign:'center'}}>
+              <div style={{fontFamily:TYPE.display,fontSize:22,lineHeight:0.9}}>{opt}<span style={{fontSize:12,opacity:0.7}}> u</span></div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:dose===opt?p.bgElev+'99':p.inkMuted,marginTop:4}}>{fmtDose(opt,pt)}</div>
+            </button>
+          ))}
+        </div>
+        <div style={{marginTop:8,padding:'8px 12px',background:p.bgInset,borderRadius:R.md,fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted}}>{pt.doseLabel}</div>
+      </div>
+
+      <div style={{marginBottom:16}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Timing</Eyebrow>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {TIMING_OPTIONS.map(t=>(
+            <button key={t.value} onClick={()=>setTiming(t.value)} style={{padding:'8px 14px',borderRadius:R.pill,background:timing===t.value?p.ink:p.bgInset,color:timing===t.value?p.bgElev:p.ink,border:`0.5px solid ${timing===t.value?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{t.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{marginBottom:22}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Injection site</Eyebrow>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {INJECTION_SITES.map(s=>(
+            <button key={s} onClick={()=>setSite(s)} style={{padding:'7px 12px',borderRadius:R.pill,background:site===s?p.ink:p.bgInset,color:site===s?p.bgElev:p.ink,border:`0.5px solid ${site===s?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',whiteSpace:'nowrap'}}>{s}</button>
+          ))}
+        </div>
+      </div>
+
+      <PillBtn p={p} kind="primary" size="lg" style={{width:'100%'}} icon={<Icons.Check size={18} color={p.bgElev}/>}
+        onClick={()=>onSave({peptideId:pt.id,dose,site,timing,date,time})}>
+        {isEdit?'Save changes':`Log ${fmtDose(dose,pt)}`}
+      </PillBtn>
+      {isEdit&&(!confirmDelete
+        ?<button onClick={()=>setConfirmDelete(true)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:'none',border:`0.5px solid ${p.line}`,color:p.accent,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer'}}>Delete log</button>
+        :<button onClick={()=>onDelete(existingLog.id)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:600,cursor:'pointer'}}>Confirm delete</button>
+      )}
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════
+// SCREEN: PEPTIDES  (Today · Levels · History)
+// ═══════════════════════════════════════════════
+function ScreenPeptides({p,openLogFor,onConsumeOpen}){
+  const peptides=DEFAULT_PEPTIDES;
+  const [logs,setLogs]=React.useState(()=>loadPeptideLogs());
+  const [subView,setSubView]=React.useState('today');
+  const [logSheet,setLogSheet]=React.useState(null);   // peptideId for a NEW log
+  const [editLog,setEditLog]=React.useState(null);     // existing log object
+  const [weekOffset,setWeekOffset]=React.useState(0);
+  const [selPeptide,setSelPeptide]=React.useState(peptides[0].id);
+
+  React.useEffect(()=>{savePeptideLogs(logs);},[logs]);
+  React.useEffect(()=>{
+    if(openLogFor){setSubView('today');setLogSheet(openLogFor);onConsumeOpen&&onConsumeOpen();}
+  },[openLogFor]);
 
   const today=localToday();
-  const todayDow=new Date().getDay();
-  const weekDates=getWeekDates(weekOffset);
 
   function handleSaveLog(entry){
-    if(editLog){
-      setPData(d=>({...d,logs:d.logs.map(l=>l.id===editLog.id?{...l,...entry}:l)}));
-      setEditLog(null);
-    } else {
-      setPData(d=>({...d,logs:[{id:`p_${Date.now()}`, ...entry},...d.logs]}));
-      setLogSheet(null);
-    }
+    if(editLog){setLogs(ls=>ls.map(l=>l.id===editLog.id?{...l,...entry}:l));setEditLog(null);}
+    else{setLogs(ls=>[{id:`p_${Date.now()}`,...entry},...ls]);setLogSheet(null);}
   }
-  function handleDeleteLog(id){
-    setPData(d=>({...d,logs:d.logs.filter(l=>l.id!==id)}));
-    setEditLog(null);
-  }
+  function handleDeleteLog(id){setLogs(ls=>ls.filter(l=>l.id!==id));setEditLog(null);}
   function takenToday(pid){return logs.some(l=>l.peptideId===pid&&l.date===today);}
 
-  // ── Log Sheet ──────────────────────────────────────────────────────────
-  function PeptideLogSheet({peptideId,existingLog,onSave,onDelete,onClose}){
-    const pt=peptides.find(x=>x.id===peptideId);
-    const isEdit=!!existingLog;
-    const [dose,setDose]=React.useState(existingLog?.dose||pt.defaultDose);
-    const [site,setSite]=React.useState(existingLog?.site||'');
-    const [timing,setTiming]=React.useState(existingLog?.timing||'');
-    const [date,setDate]=React.useState(existingLog?.date||today);
-    const [confirmDelete,setConfirmDelete]=React.useState(false);
-
-    return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
-      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)'}}/>
-      <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(36px,env(safe-area-inset-bottom))',maxHeight:'90vh',overflowY:'auto'}}>
-        <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-          <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>{isEdit?'Edit log':pt.name}</div>
-          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
-        </div>
-        <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:20}}>{pt.source} · {pt.timingLabel}</div>
-
-        {/* Date */}
-        <div style={{marginBottom:16}}>
-          <Eyebrow p={p} style={{marginBottom:8}}>Date</Eyebrow>
-          <input type="date" value={date} max={today} onChange={e=>setDate(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:15,color:p.ink,outline:'none'}}/>
-        </div>
-
-        {/* Dose */}
-        <div style={{marginBottom:16}}>
-          <Eyebrow p={p} style={{marginBottom:8}}>Dose</Eyebrow>
-          <div style={{display:'flex',gap:8}}>
-            {pt.doseOptions.map(opt=>(
-              <button key={opt} onClick={()=>setDose(opt)} style={{flex:1,padding:'14px 8px',borderRadius:R.md,background:dose===opt?p.ink:p.bgInset,color:dose===opt?p.bgElev:p.ink,border:`0.5px solid ${dose===opt?'transparent':p.line}`,cursor:'pointer',textAlign:'center'}}>
-                <div style={{fontFamily:TYPE.display,fontSize:22,lineHeight:0.9}}>{opt}</div>
-                <div style={{fontFamily:TYPE.mono,fontSize:10,color:dose===opt?p.bgElev+'99':p.inkMuted,marginTop:4}}>{unitsToMcg(opt,pt)} mcg</div>
-              </button>
-            ))}
-          </div>
-          <div style={{marginTop:8,padding:'8px 12px',background:p.bgInset,borderRadius:R.md,fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted}}>{pt.doseLabel}</div>
-        </div>
-
-        {/* Timing */}
-        <div style={{marginBottom:16}}>
-          <Eyebrow p={p} style={{marginBottom:8}}>Timing</Eyebrow>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {TIMING_OPTIONS.map(t=>(
-              <button key={t.value} onClick={()=>setTiming(t.value)} style={{padding:'8px 14px',borderRadius:R.pill,background:timing===t.value?p.ink:p.bgInset,color:timing===t.value?p.bgElev:p.ink,border:`0.5px solid ${timing===t.value?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{t.label}</button>
-            ))}
-          </div>
-        </div>
-
-        {/* Site */}
-        <div style={{marginBottom:22}}>
-          <Eyebrow p={p} style={{marginBottom:8}}>Injection site</Eyebrow>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {INJECTION_SITES.map(s=>(
-              <button key={s} onClick={()=>setSite(s)} style={{padding:'7px 12px',borderRadius:R.pill,background:site===s?p.ink:p.bgInset,color:site===s?p.bgElev:p.ink,border:`0.5px solid ${site===s?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',whiteSpace:'nowrap'}}>{s}</button>
-            ))}
-          </div>
-        </div>
-
-        <PillBtn p={p} kind="primary" size="lg" style={{width:'100%'}} icon={<Icons.Check size={18} color={p.bgElev}/>}
-          onClick={()=>onSave({peptideId,dose,site,timing,date})}>
-          {isEdit?'Save changes':'Log injection'}
-        </PillBtn>
-        {isEdit&&(!confirmDelete
-          ?<button onClick={()=>setConfirmDelete(true)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:'none',border:`0.5px solid ${p.line}`,color:p.accent,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer'}}>Delete log</button>
-          :<button onClick={()=>onDelete(existingLog.id)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:600,cursor:'pointer'}}>Confirm delete</button>
-        )}
-      </div>
-    </div>;
-  }
-
-  // ── Today view ──────────────────────────────────────────────────────────
+  // -- TODAY --
   function TodayView(){
     return <div style={{padding:'0 16px 110px'}}>
+      <div style={{padding:'0 6px 14px'}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.5}}>
+          Tap any peptide to log a dose — on a scheduled day or not. Forgot one? Backdate it with the date picker.
+        </div>
+      </div>
       {peptides.map(pt=>{
-        const isScheduled=pt.scheduleDays.includes(todayDow);
         const taken=takenToday(pt.id);
         const todayLog=logs.find(l=>l.peptideId===pt.id&&l.date===today);
-        const adh=getAdherence(logs,pt.id,pt.scheduleDays,0);
-        const adhPct=adh.scheduled>0?adh.taken/adh.scheduled:0;
-
+        const count=getWeeklyCount(logs,pt.id,0);
+        const pct=Math.min(1,count/pt.weeklyTarget);
         return <div key={pt.id} style={{background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,padding:18,marginBottom:12}}>
-          {/* Header */}
           <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:14}}>
-            <div>
-              <div style={{fontFamily:TYPE.display,fontSize:20,color:p.ink,letterSpacing:'-0.015em'}}>{pt.name}</div>
-              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginTop:2}}>{pt.source} · {pt.timingLabel}</div>
+            <div style={{minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{width:9,height:9,borderRadius:5,background:pt.color,flexShrink:0}}/>
+                <div style={{fontFamily:TYPE.display,fontSize:20,color:p.ink,letterSpacing:'-0.015em'}}>{pt.name}</div>
+              </div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginTop:3}}>{pt.weeklyTarget}×/week · {pt.timingLabel}</div>
             </div>
-            <div style={{padding:'4px 10px',borderRadius:R.pill,background:!isScheduled?p.bgInset:taken?pt.color:p.bgInset,border:`0.5px solid ${!isScheduled?p.line:taken?'transparent':p.line}`}}>
-              <span style={{fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.06em',textTransform:'uppercase',color:!isScheduled?p.inkMuted:taken?'#fff':p.inkSoft}}>
-                {!isScheduled?'Rest Day':taken?'✓ Taken':'Pending'}
+            <div style={{padding:'4px 10px',borderRadius:R.pill,background:taken?pt.color:p.bgInset,border:`0.5px solid ${taken?'transparent':p.line}`,flexShrink:0}}>
+              <span style={{fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.06em',textTransform:'uppercase',color:taken?'#fff':p.inkSoft}}>
+                {taken?'✓ Logged':`${count}/${pt.weeklyTarget} wk`}
               </span>
             </div>
           </div>
 
-          {/* Dose row */}
           <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
-            {/* Mini ring */}
             <div style={{position:'relative',width:48,height:48,flexShrink:0}}>
               <svg width={48} height={48} style={{transform:'rotate(-90deg)'}}>
                 <circle cx={24} cy={24} r={19} stroke={p.bgInset} strokeWidth={5} fill="none"/>
@@ -1018,52 +1065,157 @@ function ScreenPeptides({p}){
                 <span style={{fontFamily:TYPE.mono,fontSize:11,color:taken?pt.color:p.inkMuted}}>{taken?'✓':'—'}</span>
               </div>
             </div>
-            <div style={{flex:1}}>
+            <div style={{flex:1,minWidth:0}}>
               <Eyebrow p={p} style={{marginBottom:3}}>Default dose</Eyebrow>
-              <div style={{display:'flex',alignItems:'baseline',gap:4}}>
+              <div style={{display:'flex',alignItems:'baseline',gap:4,flexWrap:'wrap'}}>
                 <span style={{fontFamily:TYPE.display,fontSize:26,color:p.ink,lineHeight:0.9}}>{pt.defaultDose}</span>
                 <span style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>units</span>
-                <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,marginLeft:4}}>= {unitsToMcg(pt.defaultDose,pt)} mcg</span>
+                <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,marginLeft:4}}>= {fmtDose(pt.defaultDose,pt)}</span>
               </div>
               {todayLog&&<div style={{fontFamily:TYPE.mono,fontSize:10,color:pt.color,marginTop:4,letterSpacing:'0.04em'}}>
-                Logged {todayLog.dose}u · {todayLog.site||'—'} · {todayLog.timing||'—'}
+                Logged {fmtDose(todayLog.dose,pt)}{todayLog.time?` · ${todayLog.time}`:''}{todayLog.site?` · ${todayLog.site}`:''}
               </div>}
             </div>
           </div>
 
-          {/* Weekly adherence */}
-          <div style={{marginBottom:isScheduled?14:0}}>
+          <div style={{marginBottom:14}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
               <Eyebrow p={p}>This week</Eyebrow>
-              <span style={{fontFamily:TYPE.mono,fontSize:11,color:adhPct===1?p.success:p.ink}}>{adh.taken}/{adh.scheduled} doses</span>
+              <span style={{fontFamily:TYPE.mono,fontSize:11,color:pct>=1?p.success:p.ink}}>{count}/{pt.weeklyTarget} doses</span>
             </div>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <div style={{flex:1,height:5,borderRadius:3,background:p.bgInset,overflow:'hidden'}}>
-                <div style={{height:'100%',width:`${adhPct*100}%`,borderRadius:3,background:adhPct===1?pt.color:adhPct>0.6?p.accent:p.warn,transition:'width 0.5s'}}/>
+                <div style={{height:'100%',width:`${pct*100}%`,borderRadius:3,background:pct>=1?pt.color:pct>0.5?p.accent:p.warn,transition:'width 0.5s'}}/>
               </div>
-              <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,minWidth:34,textAlign:'right'}}>{Math.round(adhPct*100)}%</span>
+              <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,minWidth:34,textAlign:'right'}}>{Math.round(pct*100)}%</span>
             </div>
           </div>
 
-          {/* Log button */}
-          {isScheduled&&<button
-            onClick={()=>taken?setEditLog(todayLog):setLogSheet(pt.id)}
-            style={{width:'100%',padding:'12px',borderRadius:R.pill,background:taken?p.bgInset:p.ink,color:taken?p.inkSoft:p.bgElev,border:`0.5px solid ${taken?p.line:'transparent'}`,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-            {taken?<><Icons.Edit size={14} color={p.inkSoft}/> Edit today's log</>:<><Icons.Plus size={14} color={p.bgElev}/> Log {pt.name}</>}
-          </button>}
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setLogSheet(pt.id)} style={{flex:1,padding:'12px',borderRadius:R.pill,background:p.ink,color:p.bgElev,border:'none',fontFamily:TYPE.ui,fontSize:13,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+              <Icons.Plus size={14} color={p.bgElev}/> {taken?'Log another':`Log ${pt.name.split(' ')[0]}`}
+            </button>
+            {taken&&todayLog&&<button onClick={()=>setEditLog(todayLog)} style={{padding:'12px 16px',borderRadius:R.pill,background:p.bgInset,color:p.inkSoft,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,cursor:'pointer',display:'flex',alignItems:'center',gap:6}}>
+              <Icons.Edit size={14} color={p.inkSoft}/> Edit
+            </button>}
+          </div>
         </div>;
       })}
     </div>;
   }
 
-  // ── History view ────────────────────────────────────────────────────────
+  // -- LEVELS --
+  function LevelsView(){
+    const pt=peptides.find(x=>x.id===selPeptide);
+    const now=Date.now();
+    const ptLogs=logs.filter(l=>l.peptideId===pt.id);
+    const injTimes=ptLogs.map(l=>logInjectionMs(l,pt)).sort((a,b)=>a-b);
+    const lastInj=injTimes.length?injTimes[injTimes.length-1]:now;
+    let startMs,endMs;
+    if(pt.dayScale){startMs=now-pt.chartHours*3600000;endMs=now+48*3600000;}
+    else{
+      const decayH=Math.max(10,Math.ceil(10*pt.halfLifeHours));
+      startMs=Math.min(lastInj-3600000,now-2*3600000);
+      endMs=Math.max(lastInj+decayH*3600000,now+3600000);
+    }
+    const span=endMs-startMs||1;
+    const W=358,H=200,padL=8,padR=8,padT=14,padB=24,plotW=W-padL-padR,plotH=H-padT-padB;
+    const steps=90;
+    const cpts=[];
+    for(let i=0;i<=steps;i++){const t=startMs+(i/steps)*span;cpts.push({t,lvl:peptideLevelAt(logs,pt,t)});}
+    const maxLvl=Math.max(...cpts.map(x=>x.lvl),1e-9)*1.18;
+    const xOf=t=>padL+((t-startMs)/span)*plotW;
+    const yOf=v=>padT+plotH-(v/maxLvl)*plotH;
+    const linePath=cpts.map((c,i)=>`${i===0?'M':'L'} ${xOf(c.t).toFixed(2)} ${yOf(c.lvl).toFixed(2)}`).join(' ');
+    const areaPath=linePath+` L ${xOf(endMs).toFixed(2)} ${padT+plotH} L ${xOf(startMs).toFixed(2)} ${padT+plotH} Z`;
+    const nowX=xOf(now);
+    const curLvl=peptideLevelAt(logs,pt,now);
+    const marks=ptLogs.map(l=>logInjectionMs(l,pt)).filter(t=>t>=startMs&&t<=endMs);
+    const labels=[];
+    const nLab=6;
+    for(let i=0;i<=nLab;i++){
+      const t=startMs+(i/nLab)*span;const relH=(t-now)/3600000;let lab,isNow;
+      if(pt.dayScale){const dd=Math.round(relH/24);lab=dd===0?'NOW':(dd>0?`+${dd}D`:`${dd}D`);isNow=Math.abs(relH)<12;}
+      else{const h=Math.round(relH);lab=h===0?'NOW':(h>0?`+${h}H`:`${h}H`);isNow=Math.abs(relH)<0.5;}
+      labels.push({x:xOf(t),lab,isNow});
+    }
+    const lastLog=ptLogs.slice().sort((a,b)=>logInjectionMs(b,pt)-logInjectionMs(a,pt))[0];
+    const hoursSince=lastLog?((now-logInjectionMs(lastLog,pt))/3600000):null;
+    const count=getWeeklyCount(logs,pt.id,0);
+
+    return <div style={{padding:'0 16px 110px'}}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+        {peptides.map(x=>{const on=x.id===selPeptide;return <button key={x.id} onClick={()=>setSelPeptide(x.id)} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 12px',borderRadius:R.pill,background:on?x.color:'transparent',color:on?'#fff':p.ink,border:`0.5px solid ${on?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>
+          <span style={{width:7,height:7,borderRadius:4,background:on?'#fff':x.color}}/>{x.name.split(' ')[0]}
+        </button>;})}
+      </div>
+
+      <Card p={p} padding={0} style={{overflow:'hidden'}}>
+        <div style={{padding:'18px 20px 4px'}}>
+          <Eyebrow p={p}>Estimated in system</Eyebrow>
+          <div style={{display:'flex',alignItems:'baseline',gap:6,marginTop:4}}>
+            <span style={{fontFamily:TYPE.display,fontSize:48,color:pt.color,lineHeight:0.9,letterSpacing:'-0.03em'}}>{fmtLevelVal(curLvl,pt)}</span>
+            <span style={{fontFamily:TYPE.ui,fontSize:14,color:p.inkSoft}}>{pt.doseUnit}</span>
+          </div>
+          <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginTop:4}}>
+            {hoursSince==null?'No doses logged yet':hoursSince<1?'Last dose under an hour ago':hoursSince<48?`Last dose ${Math.round(hoursSince)} h ago`:`Last dose ${Math.round(hoursSince/24)} d ago`}
+          </div>
+        </div>
+        <div style={{padding:'0 14px 8px'}}>
+          <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
+            <defs>
+              <linearGradient id="pepFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={pt.color} stopOpacity="0.24"/><stop offset="100%" stopColor={pt.color} stopOpacity="0"/></linearGradient>
+              <pattern id="pepDashFut" patternUnits="userSpaceOnUse" width="6" height="6"><line x1="0" y1="0" x2="6" y2="6" stroke={p.line} strokeWidth="0.5"/></pattern>
+            </defs>
+            {[0.25,0.5,0.75].map((g,i)=><line key={i} x1={padL} x2={W-padR} y1={padT+plotH*g} y2={padT+plotH*g} stroke={p.chartGrid} strokeWidth="0.5" strokeDasharray="3 4"/>)}
+            {nowX<W-padR&&<rect x={Math.max(padL,nowX)} y={padT} width={Math.max(0,W-padR-Math.max(padL,nowX))} height={plotH} fill="url(#pepDashFut)"/>}
+            <path d={areaPath} fill="url(#pepFill)"/>
+            <path d={linePath} stroke={pt.color} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+            {nowX>=padL&&nowX<=W-padR&&<><line x1={nowX} x2={nowX} y1={padT-4} y2={padT+plotH} stroke={p.accent} strokeWidth="1" strokeDasharray="2 3"/>
+            <circle cx={nowX} cy={yOf(curLvl)} r="5" fill={p.accent}/>
+            <circle cx={nowX} cy={yOf(curLvl)} r="9" fill={p.accent} fillOpacity="0.18"/>
+            <g transform={`translate(${Math.min(Math.max(nowX,22),W-22)},${padT-8})`}><rect x="-22" y="-14" width="44" height="14" rx="7" fill={p.accent}/><text x="0" y="-3" fill="#fff" textAnchor="middle" style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:600,letterSpacing:'0.1em'}}>NOW</text></g></>}
+            {marks.map((t,i)=>{const sx=xOf(t);return <g key={i}><line x1={sx} x2={sx} y1={padT+plotH-4} y2={padT+plotH+4} stroke={pt.color} strokeWidth="1.2"/><circle cx={sx} cy={padT+plotH+8} r="2" fill={pt.color}/></g>;})}
+            {labels.map((l,i)=><text key={i} x={Math.min(Math.max(l.x,12),W-12)} y={H-4} textAnchor="middle" fill={l.isNow?p.accent:p.inkMuted} style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:l.isNow?600:400,letterSpacing:'0.06em'}}>{l.lab}</text>)}
+          </svg>
+        </div>
+      </Card>
+
+      <div style={{padding:'14px 0 0',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+        {[
+          {label:'In system',v:fmtLevelVal(curLvl,pt),unit:pt.doseUnit,color:pt.color},
+          {label:'Half-life',v:fmtHL(pt.halfLifeHours),unit:'',color:p.weight},
+          {label:'This week',v:`${count}/${pt.weeklyTarget}`,unit:'',color:p.accent},
+        ].map(t=>(
+          <div key={t.label} style={{background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,padding:'14px'}}>
+            <Eyebrow p={p} style={{marginBottom:6}}>{t.label}</Eyebrow>
+            <div style={{display:'flex',alignItems:'baseline',gap:3}}><span style={{fontFamily:TYPE.display,fontSize:t.v.length>4?20:26,color:t.color,lineHeight:0.95,letterSpacing:'-0.025em'}}>{t.v}</span>{t.unit&&<span style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft}}>{t.unit}</span>}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{marginTop:14}}>
+        <Card p={p} padding={14} soft>
+          <div style={{display:'flex',gap:10}}>
+            <div style={{flexShrink:0,marginTop:1}}><Icons.Clock size={15} color={pt.color}/></div>
+            <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.55}}>{pt.levelNote}</div>
+          </div>
+        </Card>
+      </div>
+      <div style={{padding:'10px 6px 0',fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,lineHeight:1.5}}>
+        Curves are estimates from published half-lives, modeled per dose with first-order absorption &amp; elimination. Not a clinical measurement.
+      </div>
+    </div>;
+  }
+
+  // -- HISTORY --
   function HistoryView(){
+    const weekDates=getWeekDates(weekOffset);
     const weekStart=fmtDate(weekDates[0]);
     const weekEnd=fmtDate(weekDates[6]);
     const DAY_ABBR=['Mo','Tu','We','Th','Fr','Sa','Su'];
 
     return <div style={{padding:'0 16px 110px'}}>
-      {/* Week nav */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
         <button onClick={()=>setWeekOffset(w=>w-1)} style={{padding:'8px 12px',borderRadius:R.md,background:p.bgElev,border:`0.5px solid ${p.line}`,cursor:'pointer',color:p.inkSoft,fontFamily:TYPE.ui,fontSize:14}}>‹</button>
         <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,textTransform:'uppercase',letterSpacing:'0.08em'}}>
@@ -1072,19 +1224,18 @@ function ScreenPeptides({p}){
         <button onClick={()=>setWeekOffset(w=>Math.min(w+1,0))} style={{padding:'8px 12px',borderRadius:R.md,background:p.bgElev,border:`0.5px solid ${p.line}`,cursor:'pointer',color:weekOffset<0?p.inkSoft:p.line,fontFamily:TYPE.ui,fontSize:14}}>›</button>
       </div>
 
-      {/* Grid */}
       <div style={{background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,padding:'14px 14px 10px',marginBottom:14}}>
-        {/* Legend */}
         <div style={{display:'flex',gap:14,marginBottom:10}}>
-          {[{c:p.primary,l:'Taken'},{c:p.bgInset,l:'Scheduled',border:p.line},{c:'transparent',l:'Off'}].map(({c,l,border})=>(
-            <div key={l} style={{display:'flex',alignItems:'center',gap:5}}>
-              <div style={{width:10,height:10,borderRadius:5,background:c,border:border?`1.5px dashed ${border}`:undefined}}/>
-              <span style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,textTransform:'uppercase',letterSpacing:'0.05em'}}>{l}</span>
-            </div>
-          ))}
+          <div style={{display:'flex',alignItems:'center',gap:5}}>
+            <div style={{width:10,height:10,borderRadius:5,background:p.inkMuted}}/>
+            <span style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,textTransform:'uppercase',letterSpacing:'0.05em'}}>Logged</span>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:5}}>
+            <div style={{width:10,height:10,borderRadius:5,background:'transparent',boxShadow:`0 0 0 2px ${p.accent}`}}/>
+            <span style={{fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,textTransform:'uppercase',letterSpacing:'0.05em'}}>Today</span>
+          </div>
         </div>
-        {/* Day headers */}
-        <div style={{display:'grid',gridTemplateColumns:'72px repeat(7,1fr)',gap:3,marginBottom:6}}>
+        <div style={{display:'grid',gridTemplateColumns:'78px repeat(7,1fr)',gap:3,marginBottom:6}}>
           <div/>
           {weekDates.map((date,i)=>{
             const d=new Date(date+'T12:00:00');
@@ -1095,93 +1246,93 @@ function ScreenPeptides({p}){
             </div>;
           })}
         </div>
-        {/* Peptide rows */}
         {peptides.map(pt=>(
-          <div key={pt.id} style={{display:'grid',gridTemplateColumns:'72px repeat(7,1fr)',gap:3,alignItems:'center',marginBottom:5}}>
-            <div style={{fontFamily:TYPE.ui,fontSize:10,color:pt.color,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',paddingRight:4}}>{pt.name}</div>
-            {weekDates.map((date,i)=>{
-              const d=new Date(date+'T12:00:00');
-              const dow=d.getDay();
-              const isScheduled=pt.scheduleDays.includes(dow);
+          <div key={pt.id} style={{display:'grid',gridTemplateColumns:'78px repeat(7,1fr)',gap:3,alignItems:'center',marginBottom:5}}>
+            <div style={{display:'flex',alignItems:'center',gap:5,minWidth:0}}>
+              <span style={{width:7,height:7,borderRadius:4,background:pt.color,flexShrink:0}}/>
+              <span style={{fontFamily:TYPE.ui,fontSize:10,color:p.inkSoft,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{pt.name.split(' ')[0]}</span>
+            </div>
+            {weekDates.map(date=>{
               const taken=logs.some(l=>l.peptideId===pt.id&&l.date===date);
               const isToday=date===today;
-              let bg=taken?pt.color:isScheduled&&date<=today?p.bgInset:'transparent';
-              let borderStyle=isScheduled&&!taken&&date<=today?`1.5px dashed ${p.line}`:taken?'none':'none';
-              return <div key={date} style={{width:24,height:24,borderRadius:12,margin:'0 auto',background:bg,border:borderStyle,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:isToday?`0 0 0 2px ${p.accent}`:'none'}}>
-                {taken&&<span style={{fontSize:9,color:'white',opacity:0.9}}>✓</span>}
+              const future=date>today;
+              return <div key={date} style={{width:24,height:24,borderRadius:12,margin:'0 auto',background:taken?pt.color:future?'transparent':p.bgInset,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:isToday?`0 0 0 2px ${p.accent}`:'none'}}>
+                {taken&&<span style={{fontSize:9,color:'#fff',opacity:0.95}}>✓</span>}
               </div>;
             })}
           </div>
         ))}
       </div>
 
-      {/* Adherence summary */}
       <Eyebrow p={p} style={{marginBottom:10}}>Adherence this week</Eyebrow>
       {peptides.map(pt=>{
-        const adh=getAdherence(logs,pt.id,pt.scheduleDays,weekOffset);
-        const pct=adh.scheduled>0?adh.taken/adh.scheduled:0;
+        const count=getWeeklyCount(logs,pt.id,weekOffset);
+        const pct=Math.min(1,count/pt.weeklyTarget);
         return <div key={pt.id} style={{background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,padding:'12px 14px',marginBottom:8}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontFamily:TYPE.ui,fontSize:14,color:p.ink,fontWeight:500}}>{pt.name}</span>
-            <span style={{fontFamily:TYPE.display,fontSize:22,color:pt.color}}>{adh.taken}<span style={{fontSize:13,color:p.inkMuted}}>/{adh.scheduled}</span></span>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{width:8,height:8,borderRadius:4,background:pt.color}}/>
+              <span style={{fontFamily:TYPE.ui,fontSize:14,color:p.ink,fontWeight:500}}>{pt.name}</span>
+            </div>
+            <span style={{fontFamily:TYPE.display,fontSize:22,color:pt.color}}>{count}<span style={{fontSize:13,color:p.inkMuted}}>/{pt.weeklyTarget}</span></span>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <div style={{flex:1,height:5,borderRadius:3,background:p.bgInset,overflow:'hidden'}}>
-              <div style={{height:'100%',width:`${pct*100}%`,borderRadius:3,background:pct===1?pt.color:pct>=0.6?p.accent:p.warn}}/>
+              <div style={{height:'100%',width:`${pct*100}%`,borderRadius:3,background:pct>=1?pt.color:pct>=0.6?p.accent:p.warn}}/>
             </div>
             <span style={{fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted,minWidth:32}}>{Math.round(pct*100)}%</span>
           </div>
         </div>;
       })}
 
-      {/* Log history */}
       <Eyebrow p={p} style={{marginTop:16,marginBottom:10}}>Injection log</Eyebrow>
-      {logs.length===0&&<div style={{textAlign:'center',padding:'32px 20px',color:p.inkMuted,fontFamily:TYPE.mono,fontSize:12}}>No injections logged yet</div>}
-      {[...logs].sort((a,b)=>b.date.localeCompare(a.date)).map(log=>{
+      {logs.length===0&&<div style={{textAlign:'center',padding:'32px 20px',color:p.inkMuted,fontFamily:TYPE.mono,fontSize:12}}>No injections logged yet. Tap a peptide on the Today tab to start.</div>}
+      {[...logs].sort((a,b)=>{const ta=`${b.date}T${b.time||'00:00'}`,tb=`${a.date}T${a.time||'00:00'}`;return ta.localeCompare(tb);}).map(log=>{
         const pt=peptides.find(x=>x.id===log.peptideId);
         if(!pt)return null;
+        const tLabel=(TIMING_OPTIONS.find(t=>t.value===log.timing)||{}).label;
         return <button key={log.id} onClick={()=>setEditLog(log)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,marginBottom:8,cursor:'pointer',textAlign:'left'}}>
           <div style={{width:36,height:36,borderRadius:18,background:pt.color+'22',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
             <Icons.Flask size={16} color={pt.color}/>
           </div>
-          <div style={{flex:1}}>
+          <div style={{flex:1,minWidth:0}}>
             <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>{pt.name}</div>
             <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:2,letterSpacing:'0.04em'}}>
-              {fmtDate(log.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()} · {log.site||'—'} · {log.timing||'—'}
+              {fmtDate(log.date,{weekday:'short',month:'short',day:'numeric'}).toUpperCase()}{log.time?` · ${log.time}`:''}{log.site?` · ${log.site}`:''}{tLabel?` · ${tLabel}`:''}
             </div>
           </div>
-          <div style={{textAlign:'right'}}>
-            <div style={{fontFamily:TYPE.display,fontSize:20,color:pt.color,lineHeight:0.9}}>{log.dose}</div>
-            <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:2}}>u · {unitsToMcg(log.dose,pt)} mcg</div>
+          <div style={{textAlign:'right',flexShrink:0}}>
+            <div style={{fontFamily:TYPE.display,fontSize:18,color:pt.color,lineHeight:0.9}}>{log.dose}<span style={{fontSize:11,opacity:0.7}}> u</span></div>
+            <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:2}}>{fmtDose(log.dose,pt)}</div>
           </div>
+          <Icons.Edit size={13} color={p.inkMuted}/>
         </button>;
       })}
     </div>;
   }
 
+  const SUBS=[{k:'today',label:'Today'},{k:'levels',label:'Levels'},{k:'history',label:'History'}];
+
   return <div style={{background:p.bg,minHeight:'100%',fontFamily:TYPE.ui,color:p.ink}}>
-    {/* Header */}
     <div style={{padding:'8px 22px 0'}}>
-      <Eyebrow p={p} style={{marginBottom:6}}>Nuform Protocol</Eyebrow>
+      <Eyebrow p={p} style={{marginBottom:6}}>Peptide Protocol</Eyebrow>
       <div style={{fontFamily:TYPE.display,fontSize:36,color:p.ink,letterSpacing:'-0.025em',lineHeight:0.95,marginBottom:16}}>
         Peptides
       </div>
     </div>
 
-    {/* Sub-tabs */}
-    <div style={{display:'flex',padding:'0 22px',borderBottom:`0.5px solid ${p.line}`,marginBottom:14}}>
-      {['today','history'].map(v=>(
-        <button key={v} onClick={()=>setSubView(v)} style={{fontFamily:TYPE.mono,fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',padding:'10px 16px 10px 0',color:subView===v?p.ink:p.inkMuted,background:'none',border:'none',borderBottom:`2px solid ${subView===v?p.ink:'transparent'}`,marginBottom:'-0.5px',cursor:'pointer',transition:'color 0.15s'}}>
-          {v==='today'?'Today':'History'}
+    <div style={{display:'flex',padding:'0 22px',borderBottom:`0.5px solid ${p.line}`,marginBottom:14,gap:4}}>
+      {SUBS.map(v=>(
+        <button key={v.k} onClick={()=>setSubView(v.k)} style={{fontFamily:TYPE.mono,fontSize:11,textTransform:'uppercase',letterSpacing:'0.08em',padding:'10px 14px 10px 0',color:subView===v.k?p.ink:p.inkMuted,background:'none',border:'none',borderBottom:`2px solid ${subView===v.k?p.ink:'transparent'}`,marginBottom:'-0.5px',cursor:'pointer',transition:'color 0.15s'}}>
+          {v.label}
         </button>
       ))}
     </div>
 
-    {subView==='today'?<TodayView/>:<HistoryView/>}
+    {subView==='today'?<TodayView/>:subView==='levels'?<LevelsView/>:<HistoryView/>}
 
-    {/* Log sheet */}
-    {logSheet&&<PeptideLogSheet peptideId={logSheet} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/>}
-    {editLog&&<PeptideLogSheet peptideId={editLog.peptideId} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/>}
+    {logSheet&&<PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===logSheet)} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/>}
+    {editLog&&<PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===editLog.peptideId)} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/>}
   </div>;
 }
 
@@ -1443,224 +1594,155 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
 }
 
 // ═══════════════════════════════════════════════
-// SCREEN: LOG SHOT
-// ═══════════════════════════════════════════════
-function ScreenLog({p,store,onClose,onSave}){
-  const NOW=Date.now();
-  const med=store.meds[0];
-  const [dose,setDose]=React.useState(String(med?.currentDose||''));
-  const [site,setSite]=React.useState('L. Abdomen');
-  const [feeling,setFeeling]=React.useState(2);
-  const [logWeight,setLogWeight]=React.useState(false);
-  const [weight,setWeight]=React.useState('');
-  const nowDate=new Date();
-  const localDateStr=`${nowDate.getFullYear()}-${String(nowDate.getMonth()+1).padStart(2,'0')}-${String(nowDate.getDate()).padStart(2,'0')}`;
-  const localTimeStr=`${String(nowDate.getHours()).padStart(2,'0')}:${String(nowDate.getMinutes()).padStart(2,'0')}`;
-  const [shotDate,setShotDate]=React.useState(localDateStr);
-  const [shotTime,setShotTime]=React.useState(localTimeStr);
-  const allSites=['L. Abdomen','R. Abdomen','L. Thigh','R. Thigh','L. Arm','R. Arm'];
-  const recentSites=store.shots.slice(-6).map(s=>s.site);
-  const siteCount=s=>recentSites.filter(r=>r===s).length;
-  const suggestedSite=allSites.reduce((min,s)=>siteCount(s)<siteCount(min)?s:min,'L. Abdomen');
-  const moods=['😣','😕','😐','🙂','😀'];
-  const moodLabels=['Rough','Off','OK','Good','Great'];
-  const doseNum=parseFloat(dose)||0;
-  const mgEff=med?effectiveMg({dose:doseNum,unit:med.unit},med):doseNum;
-  const showMgPreview=med&&med.unit!=='mg'&&doseNum>0;
-
-  function handleSave(){
-    if(!med||!doseNum)return;
-    const shotDateTime=new Date(`${shotDate}T${shotTime}:00`).toISOString();
-    const newShot={id:`shot_${Date.now()}`,medId:med.id,dose:doseNum,unit:med.unit,date:shotDateTime,site,notes:`Feeling: ${moodLabels[feeling]}`,weight:logWeight&&weight?parseFloat(weight):null};
-    const newStore={...store,shots:[...store.shots,newShot].sort((a,b)=>new Date(a.date)-new Date(b.date)),weights:logWeight&&weight?[...store.weights,{id:`wt_${Date.now()}`,weight:parseFloat(weight),date:shotDate,notes:'Logged with shot'}]:store.weights};
-    newStore.meds=store.meds.map(m=>m.id===med.id?{...m,currentDose:doseNum}:m);
-    saveStore(newStore);onSave(newStore);
-  }
-
-  return <div style={{position:'absolute',inset:0,background:p.bg,display:'flex',flexDirection:'column',zIndex:200,fontFamily:TYPE.ui,color:p.ink}}>
-    <div style={{padding:'12px 22px 4px',paddingTop:'max(12px,env(safe-area-inset-top))',display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
-      <div style={{width:40,height:4,borderRadius:2,background:p.line}}/>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',width:'100%'}}>
-        <button onClick={onClose} style={{background:'none',border:'none',color:p.inkSoft,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer',padding:4}}>Cancel</button>
-        <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.inkSoft,fontWeight:500}}>New injection</div>
-        <div style={{width:50}}/>
-      </div>
-    </div>
-    <div style={{flex:1,overflowY:'auto',padding:'16px 22px 24px'}}>
-      <div style={{marginBottom:24}}>
-        <Eyebrow p={p}>Logging</Eyebrow>
-        <div style={{fontFamily:TYPE.display,fontSize:34,color:p.ink,letterSpacing:'-0.025em',lineHeight:0.95,marginTop:6}}>{med?.name||'Injection'}</div>
-        <div style={{display:'flex',gap:8,marginTop:10}}>
-          <input type="date" value={shotDate} max={localToday()} onChange={e=>setShotDate(e.target.value)} style={{flex:1,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
-          <input type="time" value={shotTime} onChange={e=>setShotTime(e.target.value)} style={{width:110,padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
-        </div>
-      </div>
-      <div style={{marginBottom:28}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <Eyebrow p={p}>Dose</Eyebrow>
-          <div><span style={{fontFamily:TYPE.display,fontSize:28,color:p.ink,letterSpacing:'-0.025em'}}>{dose||'—'}</span><span style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginLeft:4}}>{med?.unit||'mg'}</span></div>
-        </div>
-        {med?.formulation==='pen'
-          ?<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {[2.5,5,7.5,10,12.5,15].map(d=>(<button key={d} onClick={()=>setDose(String(d))} style={{flex:'1 1 60px',padding:'14px 8px',borderRadius:R.md,background:dose===String(d)?p.ink:p.bgElev,color:dose===String(d)?p.bgElev:p.ink,border:`0.5px solid ${dose===String(d)?'transparent':p.line}`,fontFamily:TYPE.display,fontSize:18,cursor:'pointer'}}>{d}</button>))}
-          </div>
-          :<input type="number" placeholder={med?.unit==='units'?'e.g. 25':med?.unit==='mL'?'e.g. 0.25':'dose'} value={dose} onChange={e=>setDose(e.target.value)} style={{width:'100%',padding:'14px 16px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:18,color:p.ink,outline:'none'}}/>
-        }
-        {showMgPreview&&<div style={{marginTop:8,padding:'8px 12px',borderRadius:R.md,background:p.primarySoft,fontFamily:TYPE.mono,fontSize:11,color:p.primary,fontWeight:500}}>= {mgEff.toFixed(2)} mg active drug</div>}
-      </div>
-      <div style={{marginBottom:28}}>
-        <Eyebrow p={p} style={{marginBottom:12}}>Injection site</Eyebrow>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-          {allSites.map(s=>(<button key={s} onClick={()=>setSite(s)} style={{padding:'8px 12px',borderRadius:R.pill,background:site===s?p.ink:siteCount(s)>=2?p.accentSoft:p.bgElev,color:site===s?p.bgElev:siteCount(s)>=2?p.accent:p.ink,border:`0.5px solid ${site===s?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',whiteSpace:'nowrap'}}>{s}</button>))}
-        </div>
-        {site!==suggestedSite&&<button onClick={()=>setSite(suggestedSite)} style={{marginTop:8,padding:'6px 12px',borderRadius:R.pill,background:p.accentSoft,color:p.accent,border:'none',fontFamily:TYPE.ui,fontSize:11,fontWeight:500,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}}>
-          <Icons.Wand size={12} color={p.accent}/> Suggest: {suggestedSite}
-        </button>}
-      </div>
-      <div style={{marginBottom:28}}>
-        <Eyebrow p={p} style={{marginBottom:12}}>Feeling right now</Eyebrow>
-        <div style={{display:'flex',gap:6}}>
-          {moods.map((m,i)=>(<button key={i} onClick={()=>setFeeling(i)} style={{flex:1,padding:'12px 4px',borderRadius:R.md,background:feeling===i?p.primarySoft:p.bgElev,border:`0.5px solid ${feeling===i?'transparent':p.line}`,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
-            <span style={{fontSize:22}}>{m}</span>
-            <span style={{fontFamily:TYPE.ui,fontSize:10,color:feeling===i?p.primary:p.inkSoft,fontWeight:500}}>{moodLabels[i]}</span>
-          </button>))}
-        </div>
-      </div>
-      <button onClick={()=>setLogWeight(a=>!a)} style={{width:'100%',padding:'16px 18px',borderRadius:R.lg,background:logWeight?p.bgInset:p.bgElev,border:`0.5px solid ${p.line}`,display:'flex',alignItems:'center',gap:12,cursor:'pointer',textAlign:'left',marginBottom:logWeight?0:32}}>
-        <div style={{width:34,height:34,borderRadius:17,background:logWeight?p.weight:p.weightSoft,color:logWeight?p.bgElev:p.weight,display:'flex',alignItems:'center',justifyContent:'center'}}><Icons.Weight size={16} color="currentColor"/></div>
-        <div style={{flex:1}}><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>Also log today's weight</div></div>
-        <div style={{width:44,height:26,borderRadius:13,background:logWeight?p.primary:p.line,position:'relative',transition:'background 0.2s'}}><div style={{position:'absolute',top:3,left:logWeight?21:3,width:20,height:20,borderRadius:10,background:'#fff',transition:'left 0.2s'}}/></div>
-      </button>
-      {logWeight&&<div style={{padding:'14px 0 32px'}}><input type="number" placeholder="Weight in lbs" value={weight} onChange={e=>setWeight(e.target.value)} style={{width:'100%',padding:'14px 16px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/></div>}
-    </div>
-    <div style={{padding:'14px 22px',paddingBottom:'max(28px,env(safe-area-inset-bottom))',background:p.bg,borderTop:`0.5px solid ${p.line}`}}>
-      <PillBtn p={p} kind="primary" size="lg" onClick={handleSave} disabled={!doseNum} style={{width:'100%'}} icon={<Icons.Check size={18} color={p.bgElev}/>}>
-        Log {dose||'—'} {med?.unit||'mg'} shot{showMgPreview?` (${mgEff.toFixed(2)} mg)`:''}
-      </PillBtn>
-    </div>
-  </div>;
-}
-
-// ═══════════════════════════════════════════════
 // SCREEN: SETTINGS
 // ═══════════════════════════════════════════════
-function ScreenSettings({p,store,onUpdate,onPaletteChange}){
+function ScreenSettings({p,store,onUpdate}){
   const [editingMed,setEditingMed]=React.useState(false);
-  const [editingGoals,setEditingGoals]=React.useState(false);
-  const [startW,setStartW]=React.useState(String(store.startWeight||''));
-  const [goalW,setGoalW]=React.useState(String(store.goalWeight||''));
-  const [startDate,setStartDate]=React.useState(store.startDate||'');
-  const [showImport,setShowImport]=React.useState(false);
-  const [importText,setImportText]=React.useState('');
-  const [importError,setImportError]=React.useState('');
+  const [name,setName]=React.useState(store.userName||'');
+  const [startWeight,setStartWeight]=React.useState(store.startWeight!=null?String(store.startWeight):'');
+  const [goalWeight,setGoalWeight]=React.useState(store.goalWeight!=null?String(store.goalWeight):'');
+  const [waterGoal,setWaterGoal]=React.useState(String(store.waterGoalOz||64));
+  const fileRef=React.useRef(null);
   const med=store.meds[0];
 
-  function saveMed(newMed){const updated={...store,meds:[newMed]};saveStore(updated);onUpdate(updated);setEditingMed(false);}
-  function saveGoals(){const updated={...store,startWeight:startW?parseFloat(startW):null,goalWeight:goalW?parseFloat(goalW):null,startDate:startDate||null};saveStore(updated);onUpdate(updated);setEditingGoals(false);}
-  function exportData(){const blob=new Blob([JSON.stringify(store,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vital-glp1-backup.json';a.click();URL.revokeObjectURL(url);}
-  function importData(){try{const parsed=JSON.parse(importText);if(!parsed.meds||!parsed.shots)throw new Error();saveStore(parsed);onUpdate(parsed);setImportText('');setImportError('');setShowImport(false);}catch{setImportError('Invalid backup file. Please paste valid JSON.');}}
+  function patch(partial){const ns={...store,...partial};saveStore(ns);onUpdate(ns);}
+  function commitName(){if((store.userName||'')!==name.trim())patch({userName:name.trim()});}
+  function commitWeights(){
+    const sw=parseFloat(startWeight),gw=parseFloat(goalWeight);
+    patch({startWeight:isNaN(sw)?null:sw,goalWeight:isNaN(gw)?null:gw});
+  }
+  function commitWater(){const g=parseInt(waterGoal,10);if(g>0)patch({waterGoalOz:g});}
 
-  if(editingMed)return <MedSetupForm p={p} initialMed={med} onSave={saveMed} onCancel={()=>setEditingMed(false)} title="Edit medication"/>;
+  function handleMedSave(m){const ns={...store,meds:[m]};saveStore(ns);onUpdate(ns);setEditingMed(false);}
 
-  function SettingRow({label,value,sub,onEdit}){
-    return <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 18px'}}>
-      <div><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>{label}</div>{sub&&<div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:2}}>{sub}</div>}</div>
-      <div style={{display:'flex',alignItems:'center',gap:10}}>
-        <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.inkSoft}}>{value}</div>
-        {onEdit&&<button onClick={onEdit} style={{background:'none',border:'none',cursor:'pointer',padding:4,color:p.inkMuted}}><Icons.Edit size={14} color={p.inkMuted}/></button>}
-      </div>
-    </div>;
+  function exportData(){
+    const data={app:'Vital',version:2,exportedAt:new Date().toISOString(),glp1:loadStore(),peptides:loadPeptideLogs()};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=`vital-backup-${localToday()}.json`;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  function handleImportFile(e){
+    const file=e.target.files&&e.target.files[0];
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        if(data.glp1)saveStore(data.glp1);
+        if(Array.isArray(data.peptides))savePeptideLogs(data.peptides);
+        else if(data.peptides&&Array.isArray(data.peptides.logs))savePeptideLogs(data.peptides.logs);
+        window.location.reload();
+      }catch(err){alert('That file could not be read as a Vital backup.');}
+    };
+    reader.readAsText(file);
   }
 
+  const palettes=Object.entries(PALETTES);
+
+  if(editingMed)return <MedSetupForm p={p} initialMed={med} onSave={handleMedSave} onCancel={()=>setEditingMed(false)} title="Edit medication"/>;
+
   return <div style={{padding:'8px 0 110px',fontFamily:TYPE.ui,background:p.bg,minHeight:'100%'}}>
-    <ScreenHeader p={p} eyebrow="Preferences" title={<span style={{fontStyle:'italic'}}>Settings</span>}/>
-    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Medication</Eyebrow></div>
+    <ScreenHeader p={p} eyebrow="Preferences" title={<>Set<span style={{fontStyle:'italic'}}>tings</span></>}/>
+
+    {/* Profile */}
     <div style={{padding:'0 16px 14px'}}>
-      <Card p={p} padding={0}>
-        {med?<>
-          <SettingRow label="Medication" value={med.name} onEdit={()=>setEditingMed(true)}/>
-          <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Current dose" value={`${med.currentDose} ${med.unit}`} onEdit={()=>setEditingMed(true)}/>
-          <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Schedule" value={med.scheduleDays?.length?med.scheduleDays.map(d=>FULLDAYS[d]).join(' & '):`Every ${med.scheduleIntervalDays||7} days`} onEdit={()=>setEditingMed(true)}/>
-          <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Half-life" value={`${med.halfLifeDays}d`} sub="PK model parameter" onEdit={()=>setEditingMed(true)}/>
-          {med.formulation==='compound_units'&&<><div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Concentration" value={`${med.concentration} mg/mL · ${med.syringeUnits}u syringe`} sub={`${(med.concentration/med.syringeUnits).toFixed(3)} mg/unit`} onEdit={()=>setEditingMed(true)}/></>}
-        </>:<button onClick={()=>setEditingMed(true)} style={{width:'100%',padding:'16px 18px',background:'none',border:'none',cursor:'pointer',textAlign:'left',fontFamily:TYPE.ui,fontSize:13,color:p.primary,fontWeight:500}}>+ Set up medication →</button>}
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:12}}>Profile</Eyebrow>
+        <InputField label="Your name" value={name} onChange={setName} p={p} placeholder="First name"/>
+        <div onBlur={commitName}/>
+        <PillBtn p={p} kind="tint" size="sm" onClick={commitName} style={{marginTop:2}}>Save name</PillBtn>
       </Card>
     </div>
-    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Goals</Eyebrow></div>
+
+    {/* Medication */}
     <div style={{padding:'0 16px 14px'}}>
-      {editingGoals
-        ?<Card p={p} padding={18}>
-          <Eyebrow p={p} style={{marginBottom:14}}>Edit goals</Eyebrow>
-          <InputField label="Start weight" value={startW} onChange={setStartW} type="number" p={p} suffix="lbs"/>
-          <InputField label="Goal weight" value={goalW} onChange={setGoalW} type="number" p={p} suffix="lbs"/>
-          <div style={{marginBottom:16}}>
-            <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Journey start date</div>
-            <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} style={{width:'100%',padding:'14px 16px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:16,color:p.ink,outline:'none'}}/>
+      <Card p={p} padding={0}>
+        <div style={{padding:'16px 18px 12px'}}><Eyebrow p={p}>Medication</Eyebrow></div>
+        <button onClick={()=>setEditingMed(true)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'4px 18px 16px',background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
+          <div style={{width:40,height:40,borderRadius:20,background:p.primarySoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Pill size={18} color={p.primary}/></div>
+          <div style={{flex:1,minWidth:0}}>
+            {med?<>
+              <div style={{fontFamily:TYPE.ui,fontSize:15,color:p.ink,fontWeight:500}}>{med.name} · {med.currentDose} {med.unit}</div>
+              <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkMuted,marginTop:2}}>
+                {med.scheduleDays?.length?med.scheduleDays.map(d=>DAYS[d]).join(', '):`Every ${med.scheduleIntervalDays||7} days`} · half-life {med.halfLifeDays}d
+              </div>
+            </>:<div style={{fontFamily:TYPE.ui,fontSize:14,color:p.ink}}>Tap to set up your medication →</div>}
           </div>
-          <div style={{display:'flex',gap:8}}>
-            <PillBtn p={p} kind="ghost" onClick={()=>setEditingGoals(false)} style={{flex:1}}>Cancel</PillBtn>
-            <PillBtn p={p} kind="primary" onClick={saveGoals} style={{flex:1}}>Save</PillBtn>
-          </div>
-        </Card>
-        :<Card p={p} padding={0}>
-          <SettingRow label="Start weight" value={store.startWeight?`${store.startWeight} lbs`:'Not set'} onEdit={()=>setEditingGoals(true)}/>
-          <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Goal weight" value={store.goalWeight?`${store.goalWeight} lbs`:'Not set'} onEdit={()=>setEditingGoals(true)}/>
-          <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-          <SettingRow label="Start date" value={store.startDate?fmtDate(store.startDate,{month:'short',day:'numeric',year:'numeric'}):'Not set'} onEdit={()=>setEditingGoals(true)}/>
-        </Card>
-      }
+          <Icons.ChevRight size={18} color={p.inkMuted}/>
+        </button>
+      </Card>
     </div>
-    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Appearance</Eyebrow></div>
+
+    {/* Goals */}
     <div style={{padding:'0 16px 14px'}}>
-      <Card p={p} padding={14}>
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:12}}>Weight goal</Eyebrow>
+        <InputField label="Starting weight" value={startWeight} onChange={setStartWeight} type="number" p={p} suffix="lbs"/>
+        <InputField label="Goal weight" value={goalWeight} onChange={setGoalWeight} type="number" p={p} suffix="lbs"/>
+        <PillBtn p={p} kind="tint" size="sm" onClick={commitWeights}>Save goal</PillBtn>
+      </Card>
+    </div>
+
+    {/* Water goal */}
+    <div style={{padding:'0 16px 14px'}}>
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:12}}>Daily water goal</Eyebrow>
+        <InputField value={waterGoal} onChange={setWaterGoal} type="number" p={p} suffix="oz" hint="Used for the water progress ring on Today"/>
+        <PillBtn p={p} kind="tint" size="sm" onClick={commitWater}>Save water goal</PillBtn>
+      </Card>
+    </div>
+
+    {/* Appearance */}
+    <div style={{padding:'0 16px 14px'}}>
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:12}}>Appearance</Eyebrow>
         <div style={{display:'flex',gap:8}}>
-          {Object.entries(PALETTES).map(([key,pal])=>(
-            <button key={key} onClick={()=>{const u={...store,palette:key};saveStore(u);onUpdate(u);onPaletteChange(key);}} style={{flex:1,padding:'12px 8px',borderRadius:R.md,background:store.palette===key?p.primary:pal.bgElev,color:store.palette===key?p.primaryInk:pal.ink,border:`1px solid ${store.palette===key?p.primary:p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{pal.name}</button>
-          ))}
+          {palettes.map(([key,pal])=>{
+            const on=(store.palette||'cream')===key;
+            return <button key={key} onClick={()=>patch({palette:key})} style={{flex:1,padding:'14px',borderRadius:R.md,background:on?p.primarySoft:p.bgInset,border:`0.5px solid ${on?p.primary:p.line}`,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
+              <div style={{display:'flex',gap:4}}>
+                <span style={{width:16,height:16,borderRadius:8,background:pal.bg,border:`0.5px solid ${pal.line}`}}/>
+                <span style={{width:16,height:16,borderRadius:8,background:pal.primary}}/>
+                <span style={{width:16,height:16,borderRadius:8,background:pal.accent}}/>
+              </div>
+              <span style={{fontFamily:TYPE.ui,fontSize:13,color:on?p.primary:p.ink,fontWeight:500}}>{pal.name}</span>
+            </button>;
+          })}
         </div>
       </Card>
     </div>
-    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Water</Eyebrow></div>
+
+    {/* Data & privacy */}
     <div style={{padding:'0 16px 14px'}}>
-      <Card p={p} padding={16}>
-        <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500,marginBottom:10}}>Daily water goal</div>
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:10}}>
-          {[48,64,80,96,128].map(oz=>(
-            <button key={oz} onClick={()=>{const u={...store,waterGoalOz:oz};saveStore(u);onUpdate(u);}} style={{flex:'1 1 50px',padding:'10px 4px',borderRadius:R.md,background:(store.waterGoalOz||64)===oz?p.ink:p.bgInset,color:(store.waterGoalOz||64)===oz?p.bgElev:p.ink,border:`0.5px solid ${(store.waterGoalOz||64)===oz?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{oz} oz</button>
-          ))}
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:6}}>Data & privacy</Eyebrow>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.5,marginBottom:14}}>
+          Everything lives on this device only — no accounts, no cloud. Back up to a file you control, or restore from one.
         </div>
-        <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted}}>Current goal: {store.waterGoalOz||64} oz/day ({Math.round((store.waterGoalOz||64)/8)} cups)</div>
+        <div style={{display:'flex',gap:8}}>
+          <PillBtn p={p} kind="ghost" onClick={exportData} icon={<Icons.Download size={15} color={p.ink}/>} style={{flex:1}}>Export</PillBtn>
+          <PillBtn p={p} kind="ghost" onClick={()=>fileRef.current&&fileRef.current.click()} icon={<Icons.Upload size={15} color={p.ink}/>} style={{flex:1}}>Import</PillBtn>
+        </div>
+        <input ref={fileRef} type="file" accept="application/json,.json" onChange={handleImportFile} style={{display:'none'}}/>
+        <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:10}}>Importing replaces current data and reloads the app.</div>
       </Card>
     </div>
-    <div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Data</Eyebrow></div>
+
+    {/* About */}
     <div style={{padding:'0 16px 14px'}}>
-      <Card p={p} padding={0}>
-        <button onClick={exportData} style={{width:'100%',padding:'14px 18px',background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',gap:12,textAlign:'left'}}>
-          <div style={{width:36,height:36,borderRadius:18,background:p.primarySoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Download size={16} color={p.primary}/></div>
-          <div><div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>Export backup</div><div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkSoft,marginTop:2}}>{store.shots.length} shots · {store.weights.length} weights</div></div>
-        </button>
-        <div style={{height:'0.5px',background:p.lineSoft,margin:'0 18px'}}/>
-        <button onClick={()=>setShowImport(a=>!a)} style={{width:'100%',padding:'14px 18px',background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',gap:12,textAlign:'left'}}>
-          <div style={{width:36,height:36,borderRadius:18,background:p.bgInset,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Upload size={16} color={p.inkSoft}/></div>
-          <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>Import backup</div>
-        </button>
-      </Card>
-      {showImport&&<div style={{marginTop:10}}>
-        <textarea placeholder="Paste backup JSON here..." value={importText} onChange={e=>setImportText(e.target.value)} rows={4} style={{width:'100%',padding:'12px 14px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${importError?p.accent:p.line}`,fontFamily:TYPE.mono,fontSize:12,color:p.ink,outline:'none',resize:'vertical'}}/>
-        {importError&&<div style={{fontFamily:TYPE.ui,fontSize:11,color:p.accent,marginTop:4}}>{importError}</div>}
-        <PillBtn p={p} kind="primary" onClick={importData} disabled={!importText} style={{marginTop:8,width:'100%'}}>Import</PillBtn>
-      </div>}
-    </div>
-    <div style={{padding:'0 16px 0'}}>
-      <Card p={p} padding={14}>
-        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.6}}>
-          <strong style={{color:p.ink}}>Vital GLP-1 Tracker</strong> — All data stored locally. No accounts, no servers, no ads.<br/><br/>
-          Drug levels are estimates using FDA label pharmacokinetic data. Not a medical device.
+      <Card p={p} soft>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+          <div style={{width:36,height:36,borderRadius:18,background:p.primary,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Icons.Spark size={18} color={p.primaryInk}/></div>
+          <div>
+            <div style={{fontFamily:TYPE.display,fontSize:22,color:p.ink,letterSpacing:'-0.02em'}}>Vital</div>
+            <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.08em'}}>GLP-1 & PEPTIDE TRACKER</div>
+          </div>
+        </div>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.55}}>
+          A private space to track your protocol. Drug-level forecasts are estimates from published pharmacokinetics, not clinical measurements — always follow your own clinician's guidance.
         </div>
       </Card>
     </div>
@@ -1672,52 +1754,78 @@ function ScreenSettings({p,store,onUpdate,onPaletteChange}){
 // ═══════════════════════════════════════════════
 function VitalApp(){
   const [store,setStore]=React.useState(()=>loadStore());
-  const [paletteKey,setPaletteKey]=React.useState(()=>loadStore()?.palette||'cream');
   const [tab,setTab]=React.useState('today');
-  const [logOpen,setLogOpen]=React.useState(false);
   const [actionOpen,setActionOpen]=React.useState(false);
-  const [logWeightOpen,setLogWeightOpen]=React.useState(false);
-  const [logWaterOpen,setLogWaterOpen]=React.useState(false);
-  const [savedFlash,setSavedFlash]=React.useState('');
-  const p=PALETTES[paletteKey]||PALETTES.cream;
+  const [shotSheet,setShotSheet]=React.useState(null);   // blank-or-existing shot for the log/edit sheet
+  const [weightSheet,setWeightSheet]=React.useState(false);
+  const [waterSheet,setWaterSheet]=React.useState(false);
+  const [savedFlash,setSavedFlash]=React.useState(false);
 
-  // 5 tabs: Today, Levels, [+], Peptides, Weight, Settings
+  const p=PALETTES[(store&&store.palette)||'cream'];
+
+  React.useEffect(()=>{
+    document.documentElement.style.background=p.bg;
+    document.body.style.background=p.bg;
+    const meta=document.querySelector('meta[name=theme-color]');
+    if(meta)meta.setAttribute('content',p.primary);
+  },[p]);
+
+  function flash(){setSavedFlash(true);setTimeout(()=>setSavedFlash(false),1500);}
+  function update(ns){setStore(ns);flash();}
+
+  // ── New GLP-1 shot (reuses the shot sheet) ──
+  function startLogShot(){
+    const med=store&&store.meds[0];
+    setActionOpen(false);
+    if(!med){setTab('settings');return;}
+    setShotSheet({id:`shot_${Date.now()}`,medId:med.id,dose:med.currentDose,unit:med.unit,date:new Date().toISOString(),site:'L. Abdomen',notes:''});
+  }
+  function saveShot(s){
+    const exists=store.shots.some(x=>x.id===s.id);
+    const shots=(exists?store.shots.map(x=>x.id===s.id?s:x):[...store.shots,s]).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    const ns={...store,shots};saveStore(ns);setStore(ns);setShotSheet(null);flash();
+  }
+  function deleteShot(id){
+    const ns={...store,shots:store.shots.filter(x=>x.id!==id)};
+    saveStore(ns);setStore(ns);setShotSheet(null);
+  }
+
+  if(!store)return <Onboarding p={p} onComplete={s=>setStore(s)}/>;
+
+  const med=store.meds[0];
   const tabs=[
     {key:'today',label:'Today',icon:Icons.Home},
     {key:'levels',label:'Levels',icon:Icons.Wave},
     {key:'peptides',label:'Peptides',icon:Icons.Flask},
-    {key:'weight',label:'Weight',icon:Icons.Scale},
+    {key:'weight',label:'Weight',icon:Icons.Weight},
     {key:'settings',label:'Settings',icon:Icons.Gear},
   ];
 
-  function onSaveShot(ns){setStore(ns);setLogOpen(false);setSavedFlash('Shot logged');setTimeout(()=>setSavedFlash(''),2000);}
-  function onSaveWeight(ns){setStore(ns);setLogWeightOpen(false);setSavedFlash('Weight saved');setTimeout(()=>setSavedFlash(''),2000);}
-  function onSaveWater(ns){setStore(ns);setLogWaterOpen(false);setSavedFlash('Water logged');setTimeout(()=>setSavedFlash(''),2000);}
-  function onUpdate(ns){setStore(ns);if(ns.palette)setPaletteKey(ns.palette);}
-
-  if(!store)return <Onboarding p={p} onComplete={s=>{setStore(s);setPaletteKey(s.palette||'cream');}}/>;
-
-  return <div style={{position:'absolute',inset:0,background:p.bg,color:p.ink,fontFamily:TYPE.ui,overflow:'hidden'}}>
-    <div style={{height:'env(safe-area-inset-top)'}}/>
-    <div style={{position:'absolute',top:'env(safe-area-inset-top)',bottom:0,left:0,right:0,overflowY:'auto'}}>
-      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={()=>setLogOpen(true)} onGoTab={setTab} onUpdate={onUpdate} onLogWeight={()=>setLogWeightOpen(true)}/>}
-      {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={onUpdate}/>}
+  return <div style={{position:'absolute',inset:0,background:p.bg,overflow:'hidden'}}>
+    <div style={{position:'absolute',inset:0,overflowY:'auto',WebkitOverflowScrolling:'touch'}}>
+      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={startLogShot} onGoTab={setTab} onUpdate={update} onLogWeight={()=>setWeightSheet(true)}/>}
+      {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={update}/>}
       {tab==='peptides'&&<ScreenPeptides p={p}/>}
-      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={onUpdate} onLogWeight={()=>setLogWeightOpen(true)}/>}
-      {tab==='settings'&&<ScreenSettings p={p} store={store} onUpdate={onUpdate} onPaletteChange={k=>setPaletteKey(k)}/>}
+      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={update} onLogWeight={()=>setWeightSheet(true)}/>}
+      {tab==='settings'&&<ScreenSettings p={p} store={store} onUpdate={update}/>}
     </div>
-    <TabBar p={p} tabs={tabs} active={tab} onTab={setTab} onAction={()=>setActionOpen(true)}/>
-    {actionOpen&&<QuickActionSheet p={p}
-      onShot={()=>{setActionOpen(false);setLogOpen(true);}}
-      onWeight={()=>{setActionOpen(false);setLogWeightOpen(true);}}
-      onWater={()=>{setActionOpen(false);setLogWaterOpen(true);}}
-      onClose={()=>setActionOpen(false)}/>}
-    {logOpen&&<ScreenLog p={p} store={store} onClose={()=>setLogOpen(false)} onSave={onSaveShot}/>}
-    {logWeightOpen&&<LogWeightSheet p={p} store={store} onSave={onSaveWeight} onClose={()=>setLogWeightOpen(false)}/>}
-    {logWaterOpen&&<LogWaterSheet p={p} store={store} onSave={onSaveWater} onClose={()=>setLogWaterOpen(false)}/>}
-    {savedFlash&&<div style={{position:'absolute',top:'calc(env(safe-area-inset-top) + 16px)',left:'50%',transform:'translateX(-50%)',background:p.primary,color:p.primaryInk,padding:'10px 18px',borderRadius:R.pill,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:8,boxShadow:`0 8px 24px ${p.ink}25`,zIndex:400,animation:'flashIn 0.3s ease',whiteSpace:'nowrap'}}>
-      <Icons.Check size={16} color={p.primaryInk}/> {savedFlash}
+
+    <TabBar tabs={tabs} active={tab} onTab={setTab} p={p} onAction={()=>setActionOpen(true)}/>
+
+    {savedFlash&&<div style={{position:'fixed',top:'max(16px,env(safe-area-inset-top))',left:'50%',zIndex:600,transform:'translateX(-50%)',background:p.ink,color:p.bgElev,padding:'8px 16px',borderRadius:R.pill,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,boxShadow:`0 6px 18px ${p.ink}40`,animation:'flashIn 0.25s ease'}}>
+      <Icons.Check size={14} color={p.bgElev}/> Saved
     </div>}
+
+    {actionOpen&&<QuickActionSheet p={p}
+      onShot={startLogShot}
+      onPeptide={()=>{setActionOpen(false);setTab('peptides');}}
+      onWeight={()=>{setActionOpen(false);setWeightSheet(true);}}
+      onWater={()=>{setActionOpen(false);setWaterSheet(true);}}
+      onClose={()=>setActionOpen(false)}/>}
+
+    {shotSheet&&<EditShotSheet p={p} shot={shotSheet} med={med} onSave={saveShot} onDelete={deleteShot} onClose={()=>setShotSheet(null)}/>}
+    {weightSheet&&<LogWeightSheet p={p} store={store} onSave={ns=>{setStore(ns);setWeightSheet(false);flash();}} onClose={()=>setWeightSheet(false)}/>}
+    {waterSheet&&<LogWaterSheet p={p} store={store} onSave={ns=>{setStore(ns);setWaterSheet(false);flash();}} onClose={()=>setWaterSheet(false)}/>}
   </div>;
 }
 
@@ -1725,7 +1833,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(<VitalApp/>);
 </script>
 
 <script>
-if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+if('serviceWorker' in navigator){
+  window.addEventListener('load',function(){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  });
+}
 </script>
 </body>
 </html>
