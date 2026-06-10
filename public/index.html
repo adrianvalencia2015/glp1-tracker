@@ -313,6 +313,25 @@ function Chip({children,p,active,style,onClick}){
   return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',borderRadius:R.pill,background:active?p.ink:'transparent',color:active?p.bgElev:p.ink,border:`0.5px solid ${active?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer',...style}}>{children}</button>;
 }
 
+// Render overlays at <body> so position:fixed escapes the scrolling screen
+// container (iOS -webkit-overflow-scrolling traps fixed children, which let the
+// tab bar paint on top of bottom sheets). Top-level portal = true modal layer.
+function Portal({children}){return ReactDOM.createPortal(children,document.body);}
+
+// Swipe-down-to-dismiss for bottom sheets. Attach `handlers` to a grab zone
+// (the handle) and spread `panelStyle` onto the sheet panel.
+function useDragToDismiss(onClose){
+  const [dy,setDy]=React.useState(0);
+  const start=React.useRef(null);
+  const handlers={
+    onTouchStart:e=>{start.current=e.touches[0].clientY;},
+    onTouchMove:e=>{if(start.current==null)return;const d=e.touches[0].clientY-start.current;if(d>0)setDy(d);},
+    onTouchEnd:()=>{if(dy>110){onClose();}setDy(0);start.current=null;},
+  };
+  const panelStyle={transform:dy?`translateY(${dy}px)`:'none',transition:dy?'none':'transform 0.25s cubic-bezier(.3,.7,.3,1)'};
+  return {handlers,panelStyle};
+}
+
 function TabBar({tabs,active,onTab,p,onAction}){
   const left=tabs.slice(0,2);
   const right=tabs.slice(2);
@@ -613,11 +632,12 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
     const newDate=new Date(`${date}T${time}:00`).toISOString();
     onSave({...shot,dose:doseNum,date:newDate,site});
   }
+  const {handlers,panelStyle}=useDragToDismiss(onClose);
 
-  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+  return <div style={{position:'fixed',inset:0,zIndex:600,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
     <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)'}}/>
-    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
-      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))',...panelStyle}}>
+      <div {...handlers} style={{padding:'2px 0 14px',margin:'-2px 0 2px',touchAction:'none',cursor:'grab'}}><div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto'}}/></div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
         <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink,letterSpacing:'-0.02em'}}>Edit shot</div>
         <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:p.inkMuted,padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
@@ -811,7 +831,7 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
         </Card>
       </div>
     </>}
-    {editingShot&&<EditShotSheet p={p} shot={editingShot} med={med} onSave={handleEditSave} onDelete={handleDelete} onClose={()=>setEditingShot(null)}/>}
+    {editingShot&&<Portal><EditShotSheet p={p} shot={editingShot} med={med} onSave={handleEditSave} onDelete={handleDelete} onClose={()=>setEditingShot(null)}/></Portal>}
   </div>;
 }
 
@@ -915,10 +935,10 @@ function ScreenLevels({p,store,onUpdate}){
         })}
       </Card>
     </div></>}
-    {editingShot&&<EditShotSheet p={p} shot={editingShot} med={med}
+    {editingShot&&<Portal><EditShotSheet p={p} shot={editingShot} med={med}
       onSave={updated=>{const ns={...store,shots:store.shots.map(s=>s.id===updated.id?updated:s).sort((a,b)=>new Date(a.date)-new Date(b.date))};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
       onDelete={id=>{const ns={...store,shots:store.shots.filter(s=>s.id!==id)};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
-      onClose={()=>setEditingShot(null)}/>}
+      onClose={()=>setEditingShot(null)}/></Portal>}
   </div>;
 }
 
@@ -934,11 +954,12 @@ function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
   const [date,setDate]=React.useState(existingLog?.date||today);
   const [time,setTime]=React.useState(existingLog?.time||nowTimeStr());
   const [confirmDelete,setConfirmDelete]=React.useState(false);
+  const {handlers,panelStyle}=useDragToDismiss(onClose);
 
-  return <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+  return <div style={{position:'fixed',inset:0,zIndex:600,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
     <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)'}}/>
-    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(36px,env(safe-area-inset-bottom))',maxHeight:'92vh',overflowY:'auto'}}>
-      <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(36px,env(safe-area-inset-bottom))',maxHeight:'92vh',overflowY:'auto',...panelStyle}}>
+      <div {...handlers} style={{padding:'2px 0 14px',margin:'-2px 0 2px',touchAction:'none',cursor:'grab'}}><div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto'}}/></div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <span style={{width:9,height:9,borderRadius:5,background:pt.color}}/>
@@ -1331,8 +1352,8 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen}){
 
     {subView==='today'?<TodayView/>:subView==='levels'?<LevelsView/>:<HistoryView/>}
 
-    {logSheet&&<PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===logSheet)} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/>}
-    {editLog&&<PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===editLog.peptideId)} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/>}
+    {logSheet&&<Portal><PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===logSheet)} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/></Portal>}
+    {editLog&&<Portal><PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===editLog.peptideId)} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/></Portal>}
   </div>;
 }
 
@@ -1575,7 +1596,7 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
         })}
       </Card>
     </div></>}
-    {editingWeight&&<div style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    {editingWeight&&<Portal><div style={{position:'fixed',inset:0,zIndex:600,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
       <div onClick={()=>setEditingWeight(null)} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
       <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(32px,env(safe-area-inset-bottom))'}}>
         <div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto 16px'}}/>
@@ -1589,7 +1610,7 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
           onClose={()=>setEditingWeight(null)}
         />
       </div>
-    </div>}
+    </div></Portal>}
   </div>;
 }
 
