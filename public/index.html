@@ -217,6 +217,76 @@ function localToday(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 function nowTimeStr(){const d=new Date();return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+function daysSinceISO(iso){if(!iso)return null;return Math.floor((Date.now()-new Date(iso).getTime())/86400000);}
+
+// -- Symptom / side-effect logging --
+const NAUSEA_LEVELS=['None','Mild','Mod','Severe'];     // index 0-3
+const LOWHIGH_LEVELS=['—','Low','Med','High'];          // index 0-3 (0 = unset)
+function emptySymptoms(){return{nausea:0,energy:0,appetite:0,note:''};}
+function hasSymptoms(s){return s&&(s.nausea>0||s.energy>0||s.appetite>0||(s.note&&s.note.trim()));}
+function fmtSymptoms(s){
+  if(!s)return'';
+  const parts=[];
+  if(s.nausea>0)parts.push(`Nausea ${NAUSEA_LEVELS[s.nausea]}`);
+  if(s.energy>0)parts.push(`Energy ${LOWHIGH_LEVELS[s.energy]}`);
+  if(s.appetite>0)parts.push(`Appetite ${LOWHIGH_LEVELS[s.appetite]}`);
+  return parts.join(' · ');
+}
+
+// -- Titration ladder: derive dose steps from the shot log --
+function titrationSteps(shots,med){
+  const sorted=[...shots].filter(s=>!med||s.medId===med.id).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const steps=[];
+  for(const s of sorted){
+    const key=`${s.dose}|${s.unit}`;
+    const last=steps[steps.length-1];
+    const mg=med?effectiveMg(s,med):s.dose;
+    if(!last||last.key!==key)steps.push({key,dose:s.dose,unit:s.unit,mg,date:s.date,count:1});
+    else last.count++;
+  }
+  return steps;
+}
+
+// -- Calendar (.ics) reminder: reliable native alerts with no backend --
+function pad2(n){return String(n).padStart(2,'0');}
+function icsStamp(d){return `${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}T${pad2(d.getHours())}${pad2(d.getMinutes())}00`;}
+function nextReminderStart(med,h,m){
+  const now=new Date();
+  for(let i=0;i<14;i++){
+    const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+i,h,m,0,0);
+    if(d.getTime()<now.getTime())continue;
+    if(med.scheduleDays&&med.scheduleDays.length){if(med.scheduleDays.includes(d.getDay()))return d;}
+    else return d;
+  }
+  return new Date(now.getFullYear(),now.getMonth(),now.getDate(),h,m,0,0);
+}
+function buildRRULE(med){
+  if(med.scheduleDays&&med.scheduleDays.length){
+    const map=['SU','MO','TU','WE','TH','FR','SA'];
+    return `RRULE:FREQ=WEEKLY;BYDAY=${med.scheduleDays.map(d=>map[d]).join(',')}`;
+  }
+  return `RRULE:FREQ=DAILY;INTERVAL=${med.scheduleIntervalDays||7}`;
+}
+function generateICS(med,timeStr){
+  const [h,m]=timeStr.split(':').map(Number);
+  const start=nextReminderStart(med,h,m);
+  const end=new Date(start.getTime()+10*60000);
+  const uid=`vital-${med.id}-${Date.now()}@vital.app`;
+  return [
+    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Vital//GLP1 Tracker//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH',
+    'BEGIN:VEVENT',`UID:${uid}`,`DTSTAMP:${icsStamp(new Date())}`,`DTSTART:${icsStamp(start)}`,`DTEND:${icsStamp(end)}`,
+    buildRRULE(med),`SUMMARY:Vital - ${med.name} shot`,
+    `DESCRIPTION:Time for your ${med.name} (${med.currentDose} ${med.unit}) injection.`,
+    'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:Shot reminder','TRIGGER:PT0M','END:VALARM',
+    'END:VEVENT','END:VCALENDAR'
+  ].join('\r\n');
+}
+function downloadFile(text,filename,type){
+  const blob=new Blob([text],{type:type||'text/plain'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 
 // -- Peptide helpers --
 function mgPerUnit(pt){return (pt.vialMg/pt.bacMl)/pt.syringeUnits;}
@@ -317,6 +387,13 @@ function Chip({children,p,active,style,onClick}){
 // container (iOS -webkit-overflow-scrolling traps fixed children, which let the
 // tab bar paint on top of bottom sheets). Top-level portal = true modal layer.
 function Portal({children}){return ReactDOM.createPortal(children,document.body);}
+
+function UndoToast({label,onUndo,p}){
+  return <div style={{position:'fixed',left:'50%',bottom:'calc(100px + env(safe-area-inset-bottom))',transform:'translateX(-50%)',zIndex:650,background:p.ink,color:p.bgElev,borderRadius:R.pill,padding:'8px 8px 8px 18px',display:'flex',alignItems:'center',gap:14,boxShadow:`0 10px 28px ${p.ink}55`,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,whiteSpace:'nowrap',animation:'flashIn 0.2s ease'}}>
+    <span>{label}</span>
+    <button onClick={onUndo} style={{background:p.bgElev,color:p.ink,border:'none',borderRadius:R.pill,padding:'7px 16px',fontFamily:TYPE.ui,fontSize:13,fontWeight:600,cursor:'pointer'}}>Undo</button>
+  </div>;
+}
 
 // Swipe-down-to-dismiss for bottom sheets. Attach `handlers` to a grab zone
 // (the handle) and spread `panelStyle` onto the sheet panel.
@@ -622,15 +699,16 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
   const [date,setDate]=React.useState(localDate);
   const [time,setTime]=React.useState(localTime);
   const [site,setSite]=React.useState(shot.site||'L. Abdomen');
-  const [confirmDelete,setConfirmDelete]=React.useState(false);
+  const [symptoms,setSymptoms]=React.useState(shot.symptoms||emptySymptoms());
   const allSites=INJECTION_SITES;
   const doseNum=parseFloat(dose)||0;
   const mgEff=med&&doseNum?effectiveMg({dose:doseNum,unit:shot.unit},med):doseNum;
   const showMg=shot.unit!=='mg'&&doseNum>0;
+  function setSym(k,v){setSymptoms(s=>({...s,[k]:s[k]===v?0:v}));}
 
   function handleSave(){
     const newDate=new Date(`${date}T${time}:00`).toISOString();
-    onSave({...shot,dose:doseNum,date:newDate,site});
+    onSave({...shot,dose:doseNum,date:newDate,site,symptoms});
   }
   const {handlers,panelStyle}=useDragToDismiss(onClose);
 
@@ -661,7 +739,7 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
         }
         {showMg&&doseNum>0&&<div style={{marginTop:6,fontFamily:TYPE.mono,fontSize:11,color:p.primary}}>= {mgEff.toFixed(2)} mg active drug</div>}
       </div>
-      <div style={{marginBottom:20}}>
+      <div style={{marginBottom:18}}>
         <Eyebrow p={p} style={{marginBottom:8}}>Injection site</Eyebrow>
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           {allSites.map(s=>(
@@ -669,13 +747,25 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
           ))}
         </div>
       </div>
+      <div style={{marginBottom:20}}>
+        <Eyebrow p={p} style={{marginBottom:10}}>How are you feeling? <span style={{color:p.inkMuted,textTransform:'none',letterSpacing:0}}>· optional</span></Eyebrow>
+        {[
+          {key:'nausea',label:'Nausea',opts:[[1,'Mild'],[2,'Mod'],[3,'Severe']]},
+          {key:'energy',label:'Energy',opts:[[1,'Low'],[2,'Med'],[3,'High']]},
+          {key:'appetite',label:'Appetite',opts:[[1,'Low'],[2,'Normal'],[3,'High']]},
+        ].map(row=>(
+          <div key={row.key} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+            <span style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,width:64,flexShrink:0}}>{row.label}</span>
+            <div style={{display:'flex',gap:6,flex:1}}>
+              {row.opts.map(([v,lbl])=>{const on=symptoms[row.key]===v;return <button key={v} onClick={()=>setSym(row.key,v)} style={{flex:1,padding:'8px 4px',borderRadius:R.md,background:on?p.ink:p.bgInset,color:on?p.bgElev:p.ink,border:`0.5px solid ${on?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{lbl}</button>;})}
+            </div>
+          </div>
+        ))}
+        <input type="text" value={symptoms.note} onChange={e=>setSymptoms(s=>({...s,note:e.target.value}))} placeholder="Other notes (optional)" style={{width:'100%',marginTop:4,padding:'11px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:14,color:p.ink,outline:'none'}}/>
+      </div>
       <div style={{display:'flex',gap:8}}>
-        {confirmDelete
-          ?<><button onClick={()=>onDelete(shot.id)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Yes, delete</button>
-          <button onClick={()=>setConfirmDelete(false)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.bgInset,color:p.ink,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Cancel</button></>
-          :<><button onClick={()=>setConfirmDelete(true)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
-          <PillBtn p={p} kind="primary" onClick={handleSave} disabled={!doseNum} style={{flex:1}}>Save changes</PillBtn></>
-        }
+        <button onClick={()=>onDelete(shot.id)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
+        <PillBtn p={p} kind="primary" onClick={handleSave} disabled={!doseNum} style={{flex:1}}>Save changes</PillBtn>
       </div>
     </div>
   </div>;
@@ -684,7 +774,7 @@ function EditShotSheet({p,shot,med,onSave,onDelete,onClose}){
 // ═══════════════════════════════════════════════
 // SCREEN: TODAY
 // ═══════════════════════════════════════════════
-function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
+function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight,onUndo}){
   const NOW=Date.now();
   const [editingShot,setEditingShot]=React.useState(null);
   const level=getCurrentLevel(store,NOW);
@@ -704,8 +794,10 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
     saveStore(newStore);onUpdate(newStore);setEditingShot(null);
   }
   function handleDelete(id){
+    const prev=store;
     const newStore={...store,shots:store.shots.filter(s=>s.id!==id)};
     saveStore(newStore);onUpdate(newStore);setEditingShot(null);
+    onUndo&&onUndo('Shot deleted',()=>{saveStore(prev);onUpdate(prev);});
   }
 
   return <div style={{padding:'8px 0 110px',fontFamily:TYPE.ui,color:p.ink,background:p.bg,minHeight:'100%'}}>
@@ -715,6 +807,38 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
         Hi, {store.userName||'there'}<span style={{fontStyle:'italic',color:p.accent}}>.</span>
       </div>
     </div>
+
+    {(()=>{
+      const today=localToday();
+      const pLogs=loadPeptideLogs();
+      const items=[];
+      if(med&&dleft<=0)items.push({key:'glp1',name:med.name,sub:`${med.currentDose} ${med.unit} · ${dleft<0?`${Math.abs(dleft)}d overdue`:'due today'}`,color:p.primary,done:false,tap:onLogShot});
+      DEFAULT_PEPTIDES.forEach(pt=>{
+        const done=pLogs.some(l=>l.peptideId===pt.id&&l.date===today);
+        const count=getWeeklyCount(pLogs,pt.id,0);
+        if(done||count<pt.weeklyTarget)items.push({key:pt.id,name:pt.name,sub:done?`Logged today`:`${fmtDose(pt.defaultDose,pt)} · ${pt.timingLabel.toLowerCase()}`,color:pt.color,done,tap:()=>onGoTab('peptides')});
+      });
+      if(!items.length)return null;
+      const remaining=items.filter(i=>!i.done).length;
+      return <div style={{padding:'0 16px 14px'}}>
+        <Card p={p} padding={0}>
+          <div style={{padding:'16px 18px 10px',display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <Eyebrow p={p}>Today's protocol</Eyebrow>
+            <span style={{fontFamily:TYPE.mono,fontSize:10,color:remaining?p.accent:p.success,letterSpacing:'0.06em'}}>{remaining?`${remaining} LEFT`:'ALL DONE'}</span>
+          </div>
+          {items.map((it,i)=>(
+            <button key={it.key} onClick={it.tap} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'11px 18px',borderTop:`0.5px solid ${p.lineSoft}`,background:'none',border:'none',borderBottom:'none',cursor:'pointer',textAlign:'left'}}>
+              <div style={{width:22,height:22,borderRadius:11,flexShrink:0,background:it.done?it.color:'transparent',border:`1.5px solid ${it.done?it.color:p.line}`,display:'flex',alignItems:'center',justifyContent:'center'}}>{it.done&&<Icons.Check size={12} color="#fff"/>}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:TYPE.ui,fontSize:14,color:it.done?p.inkMuted:p.ink,fontWeight:500,textDecoration:it.done?'line-through':'none'}}>{it.name}</div>
+                <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginTop:1,letterSpacing:'0.03em'}}>{it.sub}</div>
+              </div>
+              {!it.done&&<Icons.ChevRight size={16} color={p.inkMuted}/>}
+            </button>
+          ))}
+        </Card>
+      </div>;
+    })()}
 
     {med?<div style={{padding:'0 16px 14px'}}>
       <Card p={p} dark ink={p.primary} padding={0} style={{overflow:'hidden',position:'relative'}}>
@@ -838,9 +962,10 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight}){
 // ═══════════════════════════════════════════════
 // SCREEN: LEVELS
 // ═══════════════════════════════════════════════
-function ScreenLevels({p,store,onUpdate}){
+function ScreenLevels({p,store,onUpdate,onUndo}){
   const [range,setRange]=React.useState(28);
   const [editingShot,setEditingShot]=React.useState(null);
+  const [probe,setProbe]=React.useState(null); // {x,t,lvl} tap-to-read
   const NOW=Date.now();
   const futureDays=14;
   const W=358,H=200,padL=8,padR=8,padT=12,padB=24,plotW=W-padL-padR,plotH=H-padT-padB;
@@ -864,6 +989,18 @@ function ScreenLevels({p,store,onUpdate}){
   const xLabels=[];
   for(let d=-pastDays;d<=futureDays;d+=Math.ceil(totalDays/6))xLabels.push({x:xOf(NOW+d*86400000),label:d===0?'Now':d<0?`${d}d`:`+${d}d`,isNow:d===0});
   const recentShots=store.shots.filter(s=>{const t=new Date(s.date).getTime();return t>=NOW-pastDays*86400000&&t<=NOW+futureDays*86400000;});
+  const ladder=titrationSteps(store.shots,med);
+
+  function readProbe(e){
+    const svg=e.currentTarget.ownerSVGElement||e.currentTarget;
+    const rect=svg.getBoundingClientRect();
+    const clientX=e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX;
+    let vbX=((clientX-rect.left)/rect.width)*W;
+    vbX=Math.max(padL,Math.min(W-padR,vbX));
+    const t=(NOW-pastDays*86400000)+((vbX-padL)/plotW)*totalDays*86400000;
+    const lvl=med?totalLevel(shots,med.halfLifeDays,med.tmaxDays,t):0;
+    setProbe({x:vbX,t,lvl});
+  }
 
   if(!med)return <div style={{padding:'40px 22px',fontFamily:TYPE.ui,color:p.inkSoft,textAlign:'center'}}><div style={{fontFamily:TYPE.display,fontSize:28,color:p.ink,marginBottom:8}}>No medication</div>Set up your medication in Settings to see your drug level forecast.</div>;
 
@@ -900,8 +1037,11 @@ function ScreenLevels({p,store,onUpdate}){
             <g transform={`translate(${nowX},${padT-8})`}><rect x="-22" y="-14" width="44" height="14" rx="7" fill={p.accent}/><text x="0" y="-3" fill="#fff" textAnchor="middle" style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:600,letterSpacing:'0.1em'}}>NOW</text></g>
             {recentShots.map(s=>{const sx=xOf(new Date(s.date).getTime());return <g key={s.id}><line x1={sx} x2={sx} y1={padT+plotH-4} y2={padT+plotH+4} stroke={p.primary} strokeWidth="1.2"/><circle cx={sx} cy={padT+plotH+8} r="2" fill={p.primary}/></g>;})}
             {xLabels.map((l,i)=><text key={i} x={l.x} y={H-4} textAnchor="middle" fill={l.isNow?p.accent:p.inkMuted} style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:l.isNow?600:400,letterSpacing:'0.08em'}}>{l.label.toUpperCase()}</text>)}
+            {probe&&(()=>{const py=yOf(probe.lvl);const lblRight=probe.x>W/2;return <g><line x1={probe.x} x2={probe.x} y1={padT} y2={padT+plotH} stroke={p.ink} strokeWidth="0.75" strokeDasharray="2 2"/><circle cx={probe.x} cy={py} r="4" fill={p.ink} stroke={p.bgElev} strokeWidth="1.5"/><g transform={`translate(${probe.x},${Math.max(padT+18,py)})`}><rect x={lblRight?-84:4} y="-15" width="80" height="29" rx="6" fill={p.ink}/><text x={lblRight?-44:44} y="-3" textAnchor="middle" fill={p.bgElev} style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:600}}>{probe.lvl.toFixed(2)} mg</text><text x={lblRight?-44:44} y="8" textAnchor="middle" fill={p.bgElev} fillOpacity="0.7" style={{fontFamily:TYPE.mono,fontSize:8}}>{fmtDate(probe.t,{month:'short',day:'numeric'}).toUpperCase()}</text></g></g>;})()}
+            <rect x={padL} y={padT} width={plotW} height={plotH} fill="transparent" style={{touchAction:'none',cursor:'crosshair'}} onMouseDown={readProbe} onMouseMove={e=>{if(e.buttons)readProbe(e);}} onTouchStart={readProbe} onTouchMove={readProbe}/>
           </svg>
         </div>
+        <div style={{padding:'0 22px 14px',fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.04em',textAlign:'center'}}>Tap or drag the chart to read the level at any point</div>
       </Card>
     </div>
     <div style={{padding:'0 16px 14px',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
@@ -912,6 +1052,22 @@ function ScreenLevels({p,store,onUpdate}){
         </div>
       ))}
     </div>
+    {ladder.length>1&&<div style={{padding:'0 16px 14px'}}>
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:14}}>Dose titration</Eyebrow>
+        <div style={{display:'flex',alignItems:'flex-end',gap:6,height:60,marginBottom:10}}>
+          {ladder.map((st,i)=>{const maxMg=Math.max(...ladder.map(s=>s.mg))||1;const h=Math.max(0.16,st.mg/maxMg);return <div key={i} style={{flex:1,height:'100%',display:'flex',alignItems:'flex-end'}}><div style={{width:'100%',height:`${h*100}%`,background:i===ladder.length-1?p.primary:p.primarySoft,borderRadius:'4px 4px 0 0'}}/></div>;})}
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {ladder.map((st,i)=>(<div key={i} style={{flex:1,textAlign:'center',minWidth:0}}>
+            <div style={{fontFamily:TYPE.mono,fontSize:11,color:p.ink,fontWeight:600}}>{st.dose}{st.unit==='mg'?'mg':''}</div>
+            {st.unit!=='mg'&&<div style={{fontFamily:TYPE.mono,fontSize:8,color:p.inkSoft}}>{st.unit}</div>}
+            <div style={{fontFamily:TYPE.mono,fontSize:8,color:p.inkMuted,marginTop:2,letterSpacing:'0.02em'}}>{fmtDate(st.date,{month:'short',day:'numeric'}).toUpperCase()}</div>
+          </div>))}
+        </div>
+        <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:12,lineHeight:1.5}}>Each step marks the first day at that dose, read from your shot log.</div>
+      </Card>
+    </div>}
     {store.shots.length>0&&<><div style={{padding:'8px 22px 8px'}}><Eyebrow p={p}>Shot history</Eyebrow></div>
     <div style={{padding:'0 16px 16px'}}>
       <Card p={p} padding={0}>
@@ -926,6 +1082,7 @@ function ScreenLevels({p,store,onUpdate}){
                 {' · '}{s.site}
               </div>
               <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.05em',marginTop:2}}>{fmtDate(s.date,{weekday:'short',month:'short',day:'numeric',year:'numeric'}).toUpperCase()}</div>
+              {hasSymptoms(s.symptoms)&&<div style={{fontFamily:TYPE.mono,fontSize:9,color:p.weight,marginTop:3,letterSpacing:'0.02em'}}>{fmtSymptoms(s.symptoms)}{s.symptoms.note?(fmtSymptoms(s.symptoms)?' · ':'')+'“'+s.symptoms.note+'”':''}</div>}
             </div>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft}}>{Math.max(0,Math.ceil((NOW-new Date(s.date))/86400000))}d ago</div>
@@ -937,7 +1094,7 @@ function ScreenLevels({p,store,onUpdate}){
     </div></>}
     {editingShot&&<Portal><EditShotSheet p={p} shot={editingShot} med={med}
       onSave={updated=>{const ns={...store,shots:store.shots.map(s=>s.id===updated.id?updated:s).sort((a,b)=>new Date(a.date)-new Date(b.date))};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
-      onDelete={id=>{const ns={...store,shots:store.shots.filter(s=>s.id!==id)};saveStore(ns);onUpdate(ns);setEditingShot(null);}}
+      onDelete={id=>{const prev=store;const ns={...store,shots:store.shots.filter(s=>s.id!==id)};saveStore(ns);onUpdate(ns);setEditingShot(null);onUndo&&onUndo('Shot deleted',()=>{saveStore(prev);onUpdate(prev);});}}
       onClose={()=>setEditingShot(null)}/></Portal>}
   </div>;
 }
@@ -953,7 +1110,6 @@ function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
   const [timing,setTiming]=React.useState(existingLog?.timing||pt.defaultTiming||'morning');
   const [date,setDate]=React.useState(existingLog?.date||today);
   const [time,setTime]=React.useState(existingLog?.time||nowTimeStr());
-  const [confirmDelete,setConfirmDelete]=React.useState(false);
   const {handlers,panelStyle}=useDragToDismiss(onClose);
 
   return <div style={{position:'fixed',inset:0,zIndex:600,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
@@ -1013,10 +1169,7 @@ function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
         onClick={()=>onSave({peptideId:pt.id,dose,site,timing,date,time})}>
         {isEdit?'Save changes':`Log ${fmtDose(dose,pt)}`}
       </PillBtn>
-      {isEdit&&(!confirmDelete
-        ?<button onClick={()=>setConfirmDelete(true)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:'none',border:`0.5px solid ${p.line}`,color:p.accent,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer'}}>Delete log</button>
-        :<button onClick={()=>onDelete(existingLog.id)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:600,cursor:'pointer'}}>Confirm delete</button>
-      )}
+      {isEdit&&<button onClick={()=>onDelete(existingLog.id)} style={{width:'100%',marginTop:10,padding:'13px',borderRadius:R.pill,background:'none',border:`0.5px solid ${p.line}`,color:p.accent,fontFamily:TYPE.ui,fontSize:14,cursor:'pointer'}}>Delete log</button>}
     </div>
   </div>;
 }
@@ -1024,7 +1177,7 @@ function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
 // ═══════════════════════════════════════════════
 // SCREEN: PEPTIDES  (Today · Levels · History)
 // ═══════════════════════════════════════════════
-function ScreenPeptides({p,openLogFor,onConsumeOpen}){
+function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
   const peptides=DEFAULT_PEPTIDES;
   const [logs,setLogs]=React.useState(()=>loadPeptideLogs());
   const [subView,setSubView]=React.useState('today');
@@ -1044,7 +1197,7 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen}){
     if(editLog){setLogs(ls=>ls.map(l=>l.id===editLog.id?{...l,...entry}:l));setEditLog(null);}
     else{setLogs(ls=>[{id:`p_${Date.now()}`,...entry},...ls]);setLogSheet(null);}
   }
-  function handleDeleteLog(id){setLogs(ls=>ls.filter(l=>l.id!==id));setEditLog(null);}
+  function handleDeleteLog(id){const prev=logs;setLogs(ls=>ls.filter(l=>l.id!==id));setEditLog(null);onUndo&&onUndo('Log deleted',()=>setLogs(prev));}
   function takenToday(pid){return logs.some(l=>l.peptideId===pid&&l.date===today);}
 
   // -- TODAY --
@@ -1163,6 +1316,16 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen}){
     const lastLog=ptLogs.slice().sort((a,b)=>logInjectionMs(b,pt)-logInjectionMs(a,pt))[0];
     const hoursSince=lastLog?((now-logInjectionMs(lastLog,pt))/3600000):null;
     const count=getWeeklyCount(logs,pt.id,0);
+    const [pProbe,setPProbe]=React.useState(null);
+    function readPProbe(e){
+      const svg=e.currentTarget.ownerSVGElement||e.currentTarget;
+      const rect=svg.getBoundingClientRect();
+      const clientX=e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX;
+      let vbX=((clientX-rect.left)/rect.width)*W;vbX=Math.max(padL,Math.min(W-padR,vbX));
+      const t=startMs+((vbX-padL)/plotW)*span;
+      setPProbe({x:vbX,t,lvl:peptideLevelAt(logs,pt,t)});
+    }
+    React.useEffect(()=>{setPProbe(null);},[selPeptide]);
 
     return <div style={{padding:'0 16px 110px'}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
@@ -1198,8 +1361,11 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen}){
             <g transform={`translate(${Math.min(Math.max(nowX,22),W-22)},${padT-8})`}><rect x="-22" y="-14" width="44" height="14" rx="7" fill={p.accent}/><text x="0" y="-3" fill="#fff" textAnchor="middle" style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:600,letterSpacing:'0.1em'}}>NOW</text></g></>}
             {marks.map((t,i)=>{const sx=xOf(t);return <g key={i}><line x1={sx} x2={sx} y1={padT+plotH-4} y2={padT+plotH+4} stroke={pt.color} strokeWidth="1.2"/><circle cx={sx} cy={padT+plotH+8} r="2" fill={pt.color}/></g>;})}
             {labels.map((l,i)=><text key={i} x={Math.min(Math.max(l.x,12),W-12)} y={H-4} textAnchor="middle" fill={l.isNow?p.accent:p.inkMuted} style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:l.isNow?600:400,letterSpacing:'0.06em'}}>{l.lab}</text>)}
+            {pProbe&&(()=>{const py=yOf(pProbe.lvl);const lblRight=pProbe.x>W/2;const relH=(pProbe.t-now)/3600000;const rl=pt.dayScale?`${relH>=0?'+':''}${Math.round(relH/24)}d`:`${relH>=0?'+':''}${Math.round(relH)}h`;return <g><line x1={pProbe.x} x2={pProbe.x} y1={padT} y2={padT+plotH} stroke={p.ink} strokeWidth="0.75" strokeDasharray="2 2"/><circle cx={pProbe.x} cy={py} r="4" fill={p.ink} stroke={p.bgElev} strokeWidth="1.5"/><g transform={`translate(${pProbe.x},${Math.max(padT+18,py)})`}><rect x={lblRight?-86:4} y="-15" width="82" height="29" rx="6" fill={p.ink}/><text x={lblRight?-45:45} y="-3" textAnchor="middle" fill={p.bgElev} style={{fontFamily:TYPE.mono,fontSize:9,fontWeight:600}}>{fmtLevelVal(pProbe.lvl,pt)} {pt.doseUnit}</text><text x={lblRight?-45:45} y="8" textAnchor="middle" fill={p.bgElev} fillOpacity="0.7" style={{fontFamily:TYPE.mono,fontSize:8}}>{rl} from now</text></g></g>;})()}
+            <rect x={padL} y={padT} width={plotW} height={plotH} fill="transparent" style={{touchAction:'none',cursor:'crosshair'}} onMouseDown={readPProbe} onMouseMove={e=>{if(e.buttons)readPProbe(e);}} onTouchStart={readPProbe} onTouchMove={readPProbe}/>
           </svg>
         </div>
+        <div style={{padding:'0 20px 14px',fontFamily:TYPE.mono,fontSize:9,color:p.inkMuted,letterSpacing:'0.04em',textAlign:'center'}}>Tap or drag to read the estimated level at any point</div>
       </Card>
 
       <div style={{padding:'14px 0 0',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
@@ -1453,7 +1619,6 @@ function LogWaterSheet({p,store,onSave,onClose}){
 function EditWeightForm({p,entry,onSave,onDelete,onClose}){
   const [weight,setWeight]=React.useState(String(entry.weight));
   const [date,setDate]=React.useState(entry.date);
-  const [confirmDelete,setConfirmDelete]=React.useState(false);
   return <>
     <div style={{marginBottom:14}}>
       <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginBottom:6,fontWeight:500}}>Date</div>
@@ -1464,12 +1629,8 @@ function EditWeightForm({p,entry,onSave,onDelete,onClose}){
       <input type="number" value={weight} onChange={e=>setWeight(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:22,color:p.ink,outline:'none'}}/>
     </div>
     <div style={{display:'flex',gap:8}}>
-      {confirmDelete
-        ?<><button onClick={()=>onDelete(entry.id)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.accent,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Yes, delete</button>
-        <button onClick={()=>setConfirmDelete(false)} style={{flex:1,padding:'14px',borderRadius:R.pill,background:p.bgInset,color:p.ink,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Cancel</button></>
-        :<><button onClick={()=>setConfirmDelete(true)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
-        <PillBtn p={p} kind="primary" onClick={()=>onSave({...entry,weight:parseFloat(weight),date})} disabled={!weight} style={{flex:1}}>Save changes</PillBtn></>
-      }
+      <button onClick={()=>onDelete(entry.id)} style={{padding:'14px 18px',borderRadius:R.pill,background:p.bgInset,color:p.accent,border:`0.5px solid ${p.line}`,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Delete</button>
+      <PillBtn p={p} kind="primary" onClick={()=>onSave({...entry,weight:parseFloat(weight),date})} disabled={!weight} style={{flex:1}}>Save changes</PillBtn>
     </div>
   </>;
 }
@@ -1477,7 +1638,7 @@ function EditWeightForm({p,entry,onSave,onDelete,onClose}){
 // ═══════════════════════════════════════════════
 // SCREEN: WEIGHT
 // ═══════════════════════════════════════════════
-function ScreenWeight({p,store,onUpdate,onLogWeight}){
+function ScreenWeight({p,store,onUpdate,onLogWeight,onUndo}){
   const NOW=Date.now();
   const [editingWeight,setEditingWeight]=React.useState(null);
   const wts=(store.weights||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
@@ -1606,7 +1767,7 @@ function ScreenWeight({p,store,onUpdate,onLogWeight}){
         </div>
         <EditWeightForm p={p} entry={editingWeight}
           onSave={updated=>{const ns={...store,weights:store.weights.map(w=>w.id===updated.id?updated:w).sort((a,b)=>a.date.localeCompare(b.date))};saveStore(ns);onUpdate(ns);setEditingWeight(null);}}
-          onDelete={id=>{const ns={...store,weights:store.weights.filter(w=>w.id!==id)};saveStore(ns);onUpdate(ns);setEditingWeight(null);}}
+          onDelete={id=>{const prev=store;const ns={...store,weights:store.weights.filter(w=>w.id!==id)};saveStore(ns);onUpdate(ns);setEditingWeight(null);onUndo&&onUndo('Entry deleted',()=>{saveStore(prev);onUpdate(prev);});}}
           onClose={()=>setEditingWeight(null)}
         />
       </div>
@@ -1623,8 +1784,10 @@ function ScreenSettings({p,store,onUpdate}){
   const [startWeight,setStartWeight]=React.useState(store.startWeight!=null?String(store.startWeight):'');
   const [goalWeight,setGoalWeight]=React.useState(store.goalWeight!=null?String(store.goalWeight):'');
   const [waterGoal,setWaterGoal]=React.useState(String(store.waterGoalOz||64));
+  const [reminderTime,setReminderTime]=React.useState(store.reminderTime||'21:00');
   const fileRef=React.useRef(null);
   const med=store.meds[0];
+  const backupAge=daysSinceISO(store.lastBackupAt);
 
   function patch(partial){const ns={...store,...partial};saveStore(ns);onUpdate(ns);}
   function commitName(){if((store.userName||'')!==name.trim())patch({userName:name.trim()});}
@@ -1637,13 +1800,10 @@ function ScreenSettings({p,store,onUpdate}){
   function handleMedSave(m){const ns={...store,meds:[m]};saveStore(ns);onUpdate(ns);setEditingMed(false);}
 
   function exportData(){
-    const data={app:'Vital',version:2,exportedAt:new Date().toISOString(),glp1:loadStore(),peptides:loadPeptideLogs()};
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download=`vital-backup-${localToday()}.json`;
-    document.body.appendChild(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    const ns={...store,lastBackupAt:new Date().toISOString()};
+    saveStore(ns);onUpdate(ns);
+    const data={app:'Vital',version:2,exportedAt:ns.lastBackupAt,glp1:ns,peptides:loadPeptideLogs()};
+    downloadFile(JSON.stringify(data,null,2),`vital-backup-${localToday()}.json`,'application/json');
   }
   function handleImportFile(e){
     const file=e.target.files&&e.target.files[0];
@@ -1716,6 +1876,27 @@ function ScreenSettings({p,store,onUpdate}){
       </Card>
     </div>
 
+    {/* Shot reminders */}
+    <div style={{padding:'0 16px 14px'}}>
+      <Card p={p}>
+        <Eyebrow p={p} style={{marginBottom:6}}>Shot reminders</Eyebrow>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.5,marginBottom:14}}>
+          Adds a repeating event to your phone's calendar that matches your shot schedule — so you get a native alert even when Vital is closed.
+        </div>
+        {med?<>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+            <span style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,flex:1}}>Remind me at</span>
+            <input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)} onBlur={()=>patch({reminderTime})} style={{padding:'10px 12px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:15,color:p.ink,outline:'none'}}/>
+          </div>
+          <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,marginBottom:12,letterSpacing:'0.03em'}}>
+            {med.scheduleDays&&med.scheduleDays.length?`REPEATS ${med.scheduleDays.map(d=>DAYS[d].toUpperCase()).join(', ')}`:`REPEATS EVERY ${med.scheduleIntervalDays||7} DAYS`}
+          </div>
+          <PillBtn p={p} kind="primary" onClick={()=>{patch({reminderTime});downloadFile(generateICS(med,reminderTime),'vital-shot-reminder.ics','text/calendar');}} icon={<Icons.Clock size={15} color={p.bgElev}/>} style={{width:'100%'}}>Add to Apple Calendar</PillBtn>
+          <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:10,lineHeight:1.5}}>Re-add if you change your schedule. True in-app push needs a server, so this uses your calendar for alerts that actually fire.</div>
+        </>:<div style={{fontFamily:TYPE.ui,fontSize:13,color:p.inkMuted}}>Set up your medication first to enable reminders.</div>}
+      </Card>
+    </div>
+
     {/* Appearance */}
     <div style={{padding:'0 16px 14px'}}>
       <Card p={p}>
@@ -1740,8 +1921,12 @@ function ScreenSettings({p,store,onUpdate}){
     <div style={{padding:'0 16px 14px'}}>
       <Card p={p}>
         <Eyebrow p={p} style={{marginBottom:6}}>Data & privacy</Eyebrow>
-        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.5,marginBottom:14}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,lineHeight:1.5,marginBottom:12}}>
           Everything lives on this device only — no accounts, no cloud. Back up to a file you control, or restore from one.
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'9px 12px',borderRadius:R.md,background:(backupAge==null||backupAge>14)?p.accentSoft:p.bgInset,marginBottom:12}}>
+          <span style={{width:7,height:7,borderRadius:4,background:(backupAge==null||backupAge>14)?p.accent:p.success,flexShrink:0}}/>
+          <span style={{fontFamily:TYPE.mono,fontSize:11,color:(backupAge==null||backupAge>14)?p.accent:p.inkSoft}}>{backupAge==null?'Never backed up — export now to be safe':backupAge===0?'Last backup: today':`Last backup: ${backupAge}d ago`}</span>
         </div>
         <div style={{display:'flex',gap:8}}>
           <PillBtn p={p} kind="ghost" onClick={exportData} icon={<Icons.Download size={15} color={p.ink}/>} style={{flex:1}}>Export</PillBtn>
@@ -1781,6 +1966,8 @@ function VitalApp(){
   const [weightSheet,setWeightSheet]=React.useState(false);
   const [waterSheet,setWaterSheet]=React.useState(false);
   const [savedFlash,setSavedFlash]=React.useState(false);
+  const [undo,setUndo]=React.useState(null);
+  const undoTimer=React.useRef(null);
 
   const p=PALETTES[(store&&store.palette)||'cream'];
 
@@ -1793,6 +1980,12 @@ function VitalApp(){
 
   function flash(){setSavedFlash(true);setTimeout(()=>setSavedFlash(false),1500);}
   function update(ns){setStore(ns);flash();}
+  function requestUndo(label,fn){
+    if(undoTimer.current)clearTimeout(undoTimer.current);
+    setUndo({label,fn});
+    undoTimer.current=setTimeout(()=>setUndo(null),5000);
+  }
+  function doUndo(){if(undo&&undo.fn)undo.fn();if(undoTimer.current)clearTimeout(undoTimer.current);setUndo(null);}
 
   // ── New GLP-1 shot (reuses the shot sheet) ──
   function startLogShot(){
@@ -1807,8 +2000,10 @@ function VitalApp(){
     const ns={...store,shots};saveStore(ns);setStore(ns);setShotSheet(null);flash();
   }
   function deleteShot(id){
+    const prev=store;
     const ns={...store,shots:store.shots.filter(x=>x.id!==id)};
     saveStore(ns);setStore(ns);setShotSheet(null);
+    requestUndo('Shot deleted',()=>{saveStore(prev);setStore(prev);});
   }
 
   if(!store)return <Onboarding p={p} onComplete={s=>setStore(s)}/>;
@@ -1824,10 +2019,10 @@ function VitalApp(){
 
   return <div style={{position:'absolute',inset:0,background:p.bg,overflow:'hidden'}}>
     <div style={{position:'absolute',inset:0,overflowY:'auto',WebkitOverflowScrolling:'touch'}}>
-      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={startLogShot} onGoTab={setTab} onUpdate={update} onLogWeight={()=>setWeightSheet(true)}/>}
-      {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={update}/>}
-      {tab==='peptides'&&<ScreenPeptides p={p}/>}
-      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={update} onLogWeight={()=>setWeightSheet(true)}/>}
+      {tab==='today'&&<ScreenToday p={p} store={store} onLogShot={startLogShot} onGoTab={setTab} onUpdate={update} onLogWeight={()=>setWeightSheet(true)} onUndo={requestUndo}/>}
+      {tab==='levels'&&<ScreenLevels p={p} store={store} onUpdate={update} onUndo={requestUndo}/>}
+      {tab==='peptides'&&<ScreenPeptides p={p} onUndo={requestUndo}/>}
+      {tab==='weight'&&<ScreenWeight p={p} store={store} onUpdate={update} onLogWeight={()=>setWeightSheet(true)} onUndo={requestUndo}/>}
       {tab==='settings'&&<ScreenSettings p={p} store={store} onUpdate={update}/>}
     </div>
 
@@ -1836,6 +2031,8 @@ function VitalApp(){
     {savedFlash&&<div style={{position:'fixed',top:'max(16px,env(safe-area-inset-top))',left:'50%',zIndex:600,transform:'translateX(-50%)',background:p.ink,color:p.bgElev,padding:'8px 16px',borderRadius:R.pill,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,boxShadow:`0 6px 18px ${p.ink}40`,animation:'flashIn 0.25s ease'}}>
       <Icons.Check size={14} color={p.bgElev}/> Saved
     </div>}
+
+    {undo&&<Portal><UndoToast p={p} label={undo.label} onUndo={doUndo}/></Portal>}
 
     {actionOpen&&<QuickActionSheet p={p}
       onShot={startLogShot}
