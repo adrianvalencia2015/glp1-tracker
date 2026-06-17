@@ -55,6 +55,9 @@ const MEDS_DB={
 const STORAGE_KEY='glp1tracker_v3';
 const PEPTIDE_KEY='vital_peptides_v2';
 const PEPTIDE_KEY_OLD='vital_peptides_v1';
+// User-adjustable peptide schedule/reminder overrides ONLY. Dosing & PK stay code-driven.
+// Shape: { [peptideId]: { days?:number[], time?:"HH:MM", activated?:bool } }
+const PEPTIDE_SCHED_KEY='vital_peptide_sched_v1';
 
 // ═══════════════════════════════════════════════
 // PEPTIDE DATA
@@ -62,6 +65,8 @@ const PEPTIDE_KEY_OLD='vital_peptides_v1';
 // Doses are stored in syringe units; display converts to mg or mcg per the label.
 // PK params are in HOURS (peptides act on a much faster scale than GLP-1).
 // ═══════════════════════════════════════════════
+// scheduleDays: weekday indices (0=Sun..6=Sat) the dose is *planned*. Editable per-peptide
+// in the app; you can always log off-schedule too. weeklyTarget is derived from these days.
 const DEFAULT_PEPTIDES=[
   {
     id:"tesamorelin",
@@ -73,7 +78,7 @@ const DEFAULT_PEPTIDES=[
     doseLabel:"10 units = 1 mg",
     timingLabel:"Night · Fasted",
     defaultTiming:"night",
-    weeklyTarget:5,
+    scheduleDays:[1,2,3,4,5],                    // Mon-Fri
     halfLifeHours:0.55, tmaxHours:0.25, chartHours:24, dayScale:false,
     levelNote:"Clears within a few hours (half-life ~30 min). The GH pulse it triggers lasts far longer than the peptide itself.",
     color:"#2E7D52",
@@ -88,7 +93,7 @@ const DEFAULT_PEPTIDES=[
     doseLabel:"7.5 units = 25 mcg · 15 units = 50 mcg",
     timingLabel:"Around Workout",
     defaultTiming:"post_workout",
-    weeklyTarget:5,
+    scheduleDays:[1,2,3,5,6],                    // workout days: Mon Tue Wed Fri Sat (skip Thu/Sun)
     halfLifeHours:25, tmaxHours:6, chartHours:192, dayScale:true,
     levelNote:"Long-acting (~20-30 h half-life) - the only one that accumulates across daily doses and shows a multi-day curve.",
     color:"#1A6B8A",
@@ -103,7 +108,7 @@ const DEFAULT_PEPTIDES=[
     doseLabel:"6 units = 200 mcg · 9 units = 300 mcg",
     timingLabel:"AM or PM · Fasted",
     defaultTiming:"morning",
-    weeklyTarget:5,
+    scheduleDays:[1,2,3,4,5],                    // Mon-Fri
     halfLifeHours:2, tmaxHours:0.5, chartHours:24, dayScale:false,
     levelNote:"No-DAC blend. CJC clears in ~30 min, ipamorelin in ~2 h - the curve approximates the longer ipamorelin tail.",
     color:"#6B3D8A",
@@ -118,10 +123,73 @@ const DEFAULT_PEPTIDES=[
     doseLabel:"10 units = 2 mg · 25 units = 5 mg",
     timingLabel:"Morning · Fasted",
     defaultTiming:"morning",
-    weeklyTarget:3,
+    scheduleDays:[1,3,5],                        // Mon / Wed / Fri
     halfLifeHours:1.1, tmaxHours:0.4, chartHours:24, dayScale:false,
     levelNote:"Clears in 1-2 h. The benefit comes from AMPK signaling it kicks off, which outlasts the molecule in your blood.",
     color:"#B5532E",
+  },
+  {
+    id:"amino1mq",
+    name:"5-Amino-1MQ",
+    vialMg:50, bacMl:10, syringeUnits:100,       // 5 mg/mL -> 0.05 mg/unit = 50 mcg/unit  (confirm vs your vial; what matters is 50 mcg/unit)
+    doseUnit:"mcg",
+    defaultDose:3,                               // Week 1 = 3u (150 mcg); bump as you ramp
+    doseOptions:[3,6,9,12],
+    doseLabel:"Ramp: 3u=150 · 6u=300 · 9u=450 · 12u=600 mcg",
+    timingLabel:"Morning only · Fasted",
+    defaultTiming:"morning",
+    scheduleDays:[0,1,2,3,4,5,6],                // daily
+    halfLifeHours:4, tmaxHours:1, chartHours:24, dayScale:false,
+    levelNote:"PK is rodent-only (no human data): ~4 h half-life from rat IV/SubQ studies, so this curve is a rough estimate. NNMT inhibitor / NAD+ booster — AM only, never PM (can disrupt sleep). Follow the 150→600 mcg ramp; don't flat-dose.",
+    color:"#C99A2E",
+  },
+  {
+    id:"aod9604",
+    name:"AOD-9604",
+    vialMg:10, bacMl:3, syringeUnits:100,        // 3.33 mg/mL -> 33.3 mcg/unit
+    doseUnit:"mcg",
+    defaultDose:7.5,
+    doseOptions:[7.5,15],
+    doseLabel:"7.5 units = 250 mcg · 15 units = 500 mcg",
+    timingLabel:"Morning · Fasted",
+    defaultTiming:"morning",
+    scheduleDays:[1,2,3,4,5],                    // Mon-Fri
+    halfLifeHours:0.5, tmaxHours:0.25, chartHours:24, dayScale:false,
+    upcoming:true, startNote:"Starts ~Jul 13",
+    levelNote:"Very short serum half-life (~30 min; some reports ~minutes), like tesamorelin. GH-fragment lipolysis tool — effects outlast the molecule. Daily fasted AM.",
+    color:"#3E8E7E",
+  },
+  {
+    id:"slu_pp_332",
+    name:"SLU-PP-332",
+    vialMg:10, bacMl:2, syringeUnits:100,        // placeholder vial -> 0.05 mg/unit; CONFIRM route & dosing
+    doseUnit:"mcg",
+    defaultDose:2,
+    doseOptions:[2,4,10,20],
+    doseLabel:"Confirm dosing — protocol lists 0.1–1.0 mg/wk",
+    timingLabel:"Anytime",
+    defaultTiming:"morning",
+    scheduleDays:[3],                            // ~1x/wk placeholder (Wed)
+    halfLifeHours:6, tmaxHours:1, chartHours:24, dayScale:false,
+    upcoming:true, startNote:"Month or 2 out · confirm w/ provider",
+    levelNote:"ERR agonist / exercise mimetic. No human PK — in-vitro half-life estimates span minutes to hours; ~6 h here is a placeholder. Confirm route (oral vs SubQ) and dose before activating.",
+    color:"#8E6B3E",
+  },
+  {
+    id:"klow",
+    name:"KLOW Blend",
+    vialMg:80, bacMl:2, syringeUnits:100,        // 40 mg/mL total blend
+    doseUnit:"mg",
+    defaultDose:10,
+    doseOptions:[10,20],
+    doseLabel:"GHK-Cu 50 + BPC-157 10 + TB-500 10 + KPV 10 mg / vial",
+    timingLabel:"Flexible",
+    defaultTiming:"morning",
+    scheduleDays:[],                             // flexible — set when you start
+    halfLifeHours:6, tmaxHours:1, chartHours:24, dayScale:false,
+    upcoming:true, blend:true, startNote:"Month out · TBD",
+    levelNote:"Four peptides (GHK-Cu, BPC-157, TB-500, KPV) that clear on very different timescales — no single level curve is meaningful, so Vital tracks doses but skips a PK chart for this one.",
+    color:"#A14E8E",
   },
 ];
 
@@ -155,6 +223,28 @@ function loadPeptideLogs(){
   return [];
 }
 function savePeptideLogs(logs){localStorage.setItem(PEPTIDE_KEY,JSON.stringify({v:2,logs}));}
+
+// -- Peptide schedule overrides (user-editable days/reminders; dosing stays code-driven) --
+function loadPeptideSched(){try{const r=localStorage.getItem(PEPTIDE_SCHED_KEY);return r?JSON.parse(r):{};}catch{return{};}}
+function savePeptideSched(o){localStorage.setItem(PEPTIDE_SCHED_KEY,JSON.stringify(o));}
+function defaultReminderTime(pt){return ({morning:"08:00",pre_workout:"07:00",post_workout:"18:00",afternoon:"14:00",night:"21:00"}[pt.defaultTiming])||"09:00";}
+function mergePeptides(sched){
+  sched=sched||{};
+  return DEFAULT_PEPTIDES.map(pt=>{
+    const ov=sched[pt.id]||{};
+    const days=Array.isArray(ov.days)?ov.days:(pt.scheduleDays||[]);
+    return {...pt,
+      scheduleDays:days,
+      weeklyTarget:days.length||1,
+      reminderTime:ov.time||defaultReminderTime(pt),
+      upcoming:!!pt.upcoming&&!ov.activated,
+    };
+  });
+}
+function isScheduledOn(pt,dateStr){
+  if(!pt.scheduleDays||!pt.scheduleDays.length)return false;
+  return pt.scheduleDays.includes(new Date(dateStr+'T12:00:00').getDay());
+}
 
 function effectiveMg(shot,med){
   if(!shot||!med)return 0;
@@ -813,10 +903,10 @@ function ScreenToday({p,store,onLogShot,onGoTab,onUpdate,onLogWeight,onUndo}){
       const pLogs=loadPeptideLogs();
       const items=[];
       if(med&&dleft<=0)items.push({key:'glp1',name:med.name,sub:`${med.currentDose} ${med.unit} · ${dleft<0?`${Math.abs(dleft)}d overdue`:'due today'}`,color:p.primary,done:false,tap:onLogShot});
-      DEFAULT_PEPTIDES.forEach(pt=>{
+      mergePeptides(loadPeptideSched()).filter(pt=>!pt.upcoming).forEach(pt=>{
         const done=pLogs.some(l=>l.peptideId===pt.id&&l.date===today);
-        const count=getWeeklyCount(pLogs,pt.id,0);
-        if(done||count<pt.weeklyTarget)items.push({key:pt.id,name:pt.name,sub:done?`Logged today`:`${fmtDose(pt.defaultDose,pt)} · ${pt.timingLabel.toLowerCase()}`,color:pt.color,done,tap:()=>onGoTab('peptides')});
+        const scheduledToday=isScheduledOn(pt,today);
+        if(done||scheduledToday)items.push({key:pt.id,name:pt.name,sub:done?`Logged today`:`${fmtDose(pt.defaultDose,pt)} · ${pt.timingLabel.toLowerCase()}`,color:pt.color,done,tap:()=>onGoTab('peptides')});
       });
       if(!items.length)return null;
       const remaining=items.filter(i=>!i.done).length;
@@ -1175,18 +1265,97 @@ function PeptideLogSheet({p,peptide:pt,existingLog,onSave,onDelete,onClose}){
 }
 
 // ═══════════════════════════════════════════════
+// PEPTIDE SCHEDULE + REMINDER SHEET
+// Edit which days a peptide is planned, set a reminder time, export an .ics
+// calendar event with a native alert (no backend needed for reliable reminders).
+// ═══════════════════════════════════════════════
+function PeptideScheduleSheet({p,peptide:pt,onSaveDays,onSaveTime,onActivate,onReset,onLogNow,onClose}){
+  const [days,setDays]=React.useState((pt.scheduleDays||[]).slice());
+  const [time,setTime]=React.useState(pt.reminderTime||'08:00');
+  const {handlers,panelStyle}=useDragToDismiss(onClose);
+  const order=[1,2,3,4,5,6,0]; // Mon-first
+  function toggle(d){setDays(ds=>ds.includes(d)?ds.filter(x=>x!==d):[...ds,d].sort((a,b)=>a-b));}
+  function commit(){onSaveDays(days);onSaveTime(time);}
+  function addReminder(){
+    commit();
+    const fakeMed={id:`pep-${pt.id}`,name:pt.name,currentDose:pt.defaultDose,unit:'u',scheduleDays:days};
+    downloadFile(generateICS(fakeMed,time),`vital-${pt.id}-reminder.ics`,'text/calendar');
+  }
+  const summary=days.length===7?'Every day':days.length?days.slice().sort((a,b)=>a-b).map(d=>FULLDAYS[d]).join(', '):'No days selected';
+
+  return <div style={{position:'fixed',inset:0,zIndex:600,display:'flex',flexDirection:'column',justifyContent:'flex-end'}}>
+    <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)'}}/>
+    <div style={{position:'relative',background:p.bgElev,borderRadius:'22px 22px 0 0',padding:'16px 22px',paddingBottom:'max(36px,env(safe-area-inset-bottom))',maxHeight:'92vh',overflowY:'auto',...panelStyle}}>
+      <div {...handlers} style={{padding:'2px 0 14px',margin:'-2px 0 2px',touchAction:'none',cursor:'grab'}}><div style={{width:40,height:4,borderRadius:2,background:p.line,margin:'0 auto'}}/></div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{width:9,height:9,borderRadius:5,background:pt.color}}/>
+          <div style={{fontFamily:TYPE.display,fontSize:24,color:p.ink}}>{pt.name}</div>
+        </div>
+        <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4}}><Icons.X size={18} color={p.inkMuted}/></button>
+      </div>
+      <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:20}}>Schedule &amp; reminder</div>
+
+      {pt.upcoming&&<div style={{background:`${pt.color}14`,border:`0.5px solid ${pt.color}55`,borderRadius:R.md,padding:'12px 14px',marginBottom:18}}>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.ink,lineHeight:1.5}}>Not in your active stack yet{pt.startNote?` — ${pt.startNote}`:''}. Set its days below, then activate it to add it to your daily protocol.</div>
+        <button onClick={()=>{commit();onActivate();}} style={{marginTop:10,padding:'9px 16px',borderRadius:R.pill,background:pt.color,color:'#fff',border:'none',fontFamily:TYPE.ui,fontSize:13,fontWeight:600,cursor:'pointer'}}>Activate now</button>
+      </div>}
+
+      <div style={{marginBottom:18}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Planned days</Eyebrow>
+        <div style={{display:'flex',gap:5}}>
+          {order.map(d=>(
+            <button key={d} onClick={()=>toggle(d)} style={{flex:1,padding:'12px 2px',borderRadius:R.md,background:days.includes(d)?pt.color:p.bgInset,color:days.includes(d)?'#fff':p.ink,border:`0.5px solid ${days.includes(d)?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>{DAYS[d][0]}</button>
+          ))}
+        </div>
+        <div style={{fontFamily:TYPE.ui,fontSize:12,color:p.inkSoft,marginTop:8}}>{summary}</div>
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          <button onClick={()=>setDays([0,1,2,3,4,5,6])} style={{flex:1,padding:'8px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,color:p.inkSoft,fontFamily:TYPE.mono,fontSize:10,letterSpacing:'0.04em',textTransform:'uppercase',cursor:'pointer'}}>Every day</button>
+          <button onClick={()=>setDays([1,2,3,4,5])} style={{flex:1,padding:'8px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,color:p.inkSoft,fontFamily:TYPE.mono,fontSize:10,letterSpacing:'0.04em',textTransform:'uppercase',cursor:'pointer'}}>Mon–Fri</button>
+          <button onClick={()=>setDays([1,3,5])} style={{flex:1,padding:'8px',borderRadius:R.md,background:p.bgInset,border:`0.5px solid ${p.line}`,color:p.inkSoft,fontFamily:TYPE.mono,fontSize:10,letterSpacing:'0.04em',textTransform:'uppercase',cursor:'pointer'}}>M/W/F</button>
+        </div>
+      </div>
+
+      <div style={{marginBottom:20}}>
+        <Eyebrow p={p} style={{marginBottom:8}}>Reminder time</Eyebrow>
+        <input type="time" value={time} onChange={e=>setTime(e.target.value)} style={{width:'100%',padding:'12px 14px',background:p.bgInset,border:`0.5px solid ${p.line}`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:15,color:p.ink,outline:'none'}}/>
+      </div>
+
+      <PillBtn p={p} kind="primary" size="lg" style={{width:'100%'}} icon={<Icons.Clock size={17} color={p.bgElev}/>}
+        onClick={addReminder} disabled={!days.length}>
+        Add reminder to Calendar
+      </PillBtn>
+      <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,lineHeight:1.5,margin:'10px 2px 0',textAlign:'center'}}>
+        Downloads a repeating calendar event with a native alert at {time} on your selected days. (Phone push without a server isn't reliable — the calendar alarm is.)
+      </div>
+
+      <div style={{display:'flex',gap:8,marginTop:14}}>
+        <button onClick={()=>{commit();onClose();}} style={{flex:1,padding:'13px',borderRadius:R.pill,background:p.bgInset,border:`0.5px solid ${p.line}`,color:p.ink,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Save schedule</button>
+        <button onClick={onLogNow} style={{flex:1,padding:'13px',borderRadius:R.pill,background:p.ink,border:'none',color:p.bgElev,fontFamily:TYPE.ui,fontSize:14,fontWeight:500,cursor:'pointer'}}>Log a dose</button>
+      </div>
+      <button onClick={()=>{onReset();onClose();}} style={{width:'100%',marginTop:10,padding:'11px',borderRadius:R.pill,background:'none',border:'none',color:p.inkMuted,fontFamily:TYPE.ui,fontSize:12,cursor:'pointer'}}>Reset to protocol default</button>
+    </div>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════
 // SCREEN: PEPTIDES  (Today · Levels · History)
 // ═══════════════════════════════════════════════
 function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
-  const peptides=DEFAULT_PEPTIDES;
+  const [sched,setSched]=React.useState(()=>loadPeptideSched());
+  const allPeptides=React.useMemo(()=>mergePeptides(sched),[sched]);
+  const peptides=allPeptides.filter(pt=>!pt.upcoming);          // active stack
+  const upcomingPeptides=allPeptides.filter(pt=>pt.upcoming);   // "starting soon"
   const [logs,setLogs]=React.useState(()=>loadPeptideLogs());
   const [subView,setSubView]=React.useState('today');
   const [logSheet,setLogSheet]=React.useState(null);   // peptideId for a NEW log
   const [editLog,setEditLog]=React.useState(null);     // existing log object
+  const [schedSheet,setSchedSheet]=React.useState(null); // peptideId for schedule editor
   const [weekOffset,setWeekOffset]=React.useState(0);
-  const [selPeptide,setSelPeptide]=React.useState(peptides[0].id);
+  const [selPeptide,setSelPeptide]=React.useState((peptides[0]||allPeptides[0]).id);
 
   React.useEffect(()=>{savePeptideLogs(logs);},[logs]);
+  React.useEffect(()=>{savePeptideSched(sched);},[sched]);
   React.useEffect(()=>{
     if(openLogFor){setSubView('today');setLogSheet(openLogFor);onConsumeOpen&&onConsumeOpen();}
   },[openLogFor]);
@@ -1199,6 +1368,8 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
   }
   function handleDeleteLog(id){const prev=logs;setLogs(ls=>ls.filter(l=>l.id!==id));setEditLog(null);onUndo&&onUndo('Log deleted',()=>setLogs(prev));}
   function takenToday(pid){return logs.some(l=>l.peptideId===pid&&l.date===today);}
+  function saveSchedFor(pid,patch){setSched(s=>({...s,[pid]:{...(s[pid]||{}),...patch}}));}
+  function resetSchedFor(pid){setSched(s=>{const n={...s};delete n[pid];return n;});}
 
   // -- TODAY --
   function TodayView(){
@@ -1213,6 +1384,8 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
         const todayLog=logs.find(l=>l.peptideId===pt.id&&l.date===today);
         const count=getWeeklyCount(logs,pt.id,0);
         const pct=Math.min(1,count/pt.weeklyTarget);
+        const scheduledToday=isScheduledOn(pt,today);
+        const dayLabel=pt.scheduleDays.length===7?'Daily':pt.scheduleDays.length?pt.scheduleDays.slice().sort((a,b)=>a-b).map(d=>DAYS[d]).join(' · '):'No set days';
         return <div key={pt.id} style={{background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,padding:18,marginBottom:12}}>
           <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:14}}>
             <div style={{minWidth:0}}>
@@ -1220,12 +1393,17 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
                 <span style={{width:9,height:9,borderRadius:5,background:pt.color,flexShrink:0}}/>
                 <div style={{fontFamily:TYPE.display,fontSize:20,color:p.ink,letterSpacing:'-0.015em'}}>{pt.name}</div>
               </div>
-              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.1em',textTransform:'uppercase',marginTop:3}}>{pt.weeklyTarget}×/week · {pt.timingLabel}</div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.08em',textTransform:'uppercase',marginTop:3}}>{dayLabel} · {pt.timingLabel}</div>
             </div>
-            <div style={{padding:'4px 10px',borderRadius:R.pill,background:taken?pt.color:p.bgInset,border:`0.5px solid ${taken?'transparent':p.line}`,flexShrink:0}}>
-              <span style={{fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.06em',textTransform:'uppercase',color:taken?'#fff':p.inkSoft}}>
-                {taken?'✓ Logged':`${count}/${pt.weeklyTarget} wk`}
-              </span>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+              <div style={{padding:'4px 10px',borderRadius:R.pill,background:taken?pt.color:scheduledToday?`${p.accent}22`:p.bgInset,border:`0.5px solid ${taken?'transparent':scheduledToday?'transparent':p.line}`}}>
+                <span style={{fontFamily:TYPE.mono,fontSize:10,fontWeight:600,letterSpacing:'0.06em',textTransform:'uppercase',color:taken?'#fff':scheduledToday?p.accent:p.inkSoft}}>
+                  {taken?'✓ Logged':scheduledToday?'Due today':'Rest day'}
+                </span>
+              </div>
+              <button onClick={()=>setSchedSheet(pt.id)} aria-label="Edit schedule" style={{width:30,height:30,borderRadius:15,background:p.bgInset,border:`0.5px solid ${p.line}`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',flexShrink:0}}>
+                <Icons.Gear size={14} color={p.inkSoft}/>
+              </button>
             </div>
           </div>
 
@@ -1275,10 +1453,25 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
           </div>
         </div>;
       })}
+
+      {upcomingPeptides.length>0&&<div style={{marginTop:6}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 6px 10px'}}>
+          <Eyebrow p={p}>Starting soon</Eyebrow>
+          <div style={{flex:1,height:'0.5px',background:p.line}}/>
+        </div>
+        {upcomingPeptides.map(pt=>(
+          <div key={pt.id} style={{background:p.bgInset,border:`0.5px dashed ${p.line}`,borderRadius:R.lg,padding:'14px 16px',marginBottom:10,display:'flex',alignItems:'center',gap:12,opacity:0.92}}>
+            <span style={{width:9,height:9,borderRadius:5,background:pt.color,flexShrink:0}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:TYPE.ui,fontSize:14,fontWeight:500,color:p.ink}}>{pt.name}</div>
+              <div style={{fontFamily:TYPE.mono,fontSize:10,color:p.inkMuted,letterSpacing:'0.04em',marginTop:2}}>{pt.startNote||'Not started'}</div>
+            </div>
+            <button onClick={()=>setSchedSheet(pt.id)} style={{padding:'8px 14px',borderRadius:R.pill,background:p.bgElev,border:`0.5px solid ${p.line}`,color:p.ink,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>Set up</button>
+          </div>
+        ))}
+      </div>}
     </div>;
   }
-
-  // -- LEVELS --
   function LevelsView(){
     const pt=peptides.find(x=>x.id===selPeptide);
     const now=Date.now();
@@ -1326,6 +1519,23 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
       setPProbe({x:vbX,t,lvl:peptideLevelAt(logs,pt,t)});
     }
     React.useEffect(()=>{setPProbe(null);},[selPeptide]);
+
+    if(pt.blend){
+      return <div style={{padding:'0 16px 110px'}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+          {peptides.map(x=>{const on=x.id===selPeptide;return <button key={x.id} onClick={()=>setSelPeptide(x.id)} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 12px',borderRadius:R.pill,background:on?x.color:'transparent',color:on?'#fff':p.ink,border:`0.5px solid ${on?'transparent':p.line}`,fontFamily:TYPE.ui,fontSize:12,fontWeight:500,cursor:'pointer'}}>
+            <span style={{width:7,height:7,borderRadius:4,background:on?'#fff':x.color}}/>{x.name.split(' ')[0]}
+          </button>;})}
+        </div>
+        <Card p={p} padding={20}>
+          <div style={{display:'flex',gap:10}}>
+            <div style={{flexShrink:0,marginTop:1}}><Icons.Flask size={16} color={pt.color}/></div>
+            <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.inkSoft,lineHeight:1.55}}>{pt.levelNote}</div>
+          </div>
+          <div style={{marginTop:14,fontFamily:TYPE.mono,fontSize:11,color:p.inkMuted}}>{getWeeklyCount(logs,pt.id,0)} dose{getWeeklyCount(logs,pt.id,0)===1?'':'s'} logged this week · doses still show in History.</div>
+        </Card>
+      </div>;
+    }
 
     return <div style={{padding:'0 16px 110px'}}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
@@ -1475,7 +1685,7 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
       <Eyebrow p={p} style={{marginTop:16,marginBottom:10}}>Injection log</Eyebrow>
       {logs.length===0&&<div style={{textAlign:'center',padding:'32px 20px',color:p.inkMuted,fontFamily:TYPE.mono,fontSize:12}}>No injections logged yet. Tap a peptide on the Today tab to start.</div>}
       {[...logs].sort((a,b)=>{const ta=`${b.date}T${b.time||'00:00'}`,tb=`${a.date}T${a.time||'00:00'}`;return ta.localeCompare(tb);}).map(log=>{
-        const pt=peptides.find(x=>x.id===log.peptideId);
+        const pt=allPeptides.find(x=>x.id===log.peptideId);
         if(!pt)return null;
         const tLabel=(TIMING_OPTIONS.find(t=>t.value===log.timing)||{}).label;
         return <button key={log.id} onClick={()=>setEditLog(log)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:p.bgElev,border:`0.5px solid ${p.line}`,borderRadius:R.lg,marginBottom:8,cursor:'pointer',textAlign:'left'}}>
@@ -1518,8 +1728,9 @@ function ScreenPeptides({p,openLogFor,onConsumeOpen,onUndo}){
 
     {subView==='today'?<TodayView/>:subView==='levels'?<LevelsView/>:<HistoryView/>}
 
-    {logSheet&&<Portal><PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===logSheet)} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/></Portal>}
-    {editLog&&<Portal><PeptideLogSheet p={p} peptide={peptides.find(x=>x.id===editLog.peptideId)} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/></Portal>}
+    {logSheet&&<Portal><PeptideLogSheet p={p} peptide={allPeptides.find(x=>x.id===logSheet)} onSave={handleSaveLog} onClose={()=>setLogSheet(null)}/></Portal>}
+    {editLog&&<Portal><PeptideLogSheet p={p} peptide={allPeptides.find(x=>x.id===editLog.peptideId)} existingLog={editLog} onSave={handleSaveLog} onDelete={handleDeleteLog} onClose={()=>setEditLog(null)}/></Portal>}
+    {schedSheet&&<Portal><PeptideScheduleSheet p={p} peptide={allPeptides.find(x=>x.id===schedSheet)} onSaveDays={days=>saveSchedFor(schedSheet,{days})} onSaveTime={time=>saveSchedFor(schedSheet,{time})} onActivate={()=>saveSchedFor(schedSheet,{activated:true})} onReset={()=>resetSchedFor(schedSheet)} onLogNow={()=>{setSchedSheet(null);setLogSheet(schedSheet);}} onClose={()=>setSchedSheet(null)}/></Portal>}
   </div>;
 }
 
