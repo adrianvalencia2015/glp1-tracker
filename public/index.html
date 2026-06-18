@@ -568,7 +568,7 @@ function MedSetupForm({p,initialMed,onSave,onCancel,title="Set up medication"}){
     if(!initialMed)return'tirzepatide';
     return Object.keys(MEDS_DB).find(k=>MEDS_DB[k].name===initialMed.name)||'tirzepatide';
   });
-  const [formulation,setFormulation]=React.useState(initialMed?.formulation||'pen');
+  const [formulation,setFormulation]=React.useState(initialMed?.formulation||'compound_units');
   const [dose,setDose]=React.useState(String(initialMed?.currentDose||'7.5'));
   const [unit,setUnit]=React.useState(initialMed?.unit||'mg');
   const [concentration,setConcentration]=React.useState(String(initialMed?.concentration||''));
@@ -650,23 +650,28 @@ function MedSetupForm({p,initialMed,onSave,onCancel,title="Set up medication"}){
       <div style={{marginBottom:24}}>
         <Eyebrow p={p} style={{marginBottom:10}}>How do you dose it?</Eyebrow>
         <div style={{display:'flex',flexDirection:'column',gap:6}}>
-          {[
-            {key:'pen',label:'Pre-filled pen / auto-injector',sub:'Dose in mg (e.g. 2.5 mg, 5 mg)'},
-            {key:'compound_units',label:'Compound vial — syringe in units',sub:'e.g. 25 units from a 100-unit syringe'},
-            {key:'compound_ml',label:'Compound vial — syringe in mL',sub:'e.g. 0.25 mL'},
-          ].map(f=>(
-            <button key={f.key} onClick={()=>setFormulation(f.key)} style={{padding:'12px 14px',borderRadius:R.md,textAlign:'left',background:formulation===f.key?p.primarySoft:p.bgElev,border:`0.5px solid ${formulation===f.key?p.primary:p.line}`,cursor:'pointer'}}>
-              <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>{f.label}</div>
-              <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:2}}>{f.sub}</div>
-            </button>
-          ))}
+          <button onClick={()=>setFormulation('pen')} style={{padding:'12px 14px',borderRadius:R.md,textAlign:'left',background:formulation==='pen'?p.primarySoft:p.bgElev,border:`0.5px solid ${formulation==='pen'?p.primary:p.line}`,cursor:'pointer'}}>
+            <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>Pre-filled pen / auto-injector</div>
+            <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:2}}>Dose in mg (e.g. 2.5 mg, 5 mg)</div>
+          </button>
+          <button onClick={()=>{if(!isCompound)setFormulation('compound_units');}} style={{padding:'12px 14px',borderRadius:R.md,textAlign:'left',background:isCompound?p.primarySoft:p.bgElev,border:`0.5px solid ${isCompound?p.primary:p.line}`,cursor:'pointer'}}>
+            <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500}}>Compound vial</div>
+            <div style={{fontFamily:TYPE.ui,fontSize:11,color:p.inkMuted,marginTop:2}}>Enter your vial strength + how much you inject — the app calculates mg</div>
+          </button>
         </div>
       </div>
       {isCompound&&<div style={{marginBottom:24,padding:16,background:p.bgInset,borderRadius:R.lg,border:`0.5px solid ${p.line}`}}>
         <Eyebrow p={p} style={{marginBottom:12}}>Vial info</Eyebrow>
-        <InputField label="Concentration (mg/mL)" value={concentration} onChange={setConcentration} type="number" placeholder="e.g. 20" p={p} suffix="mg/mL" hint="Found on your vial label"/>
-        {isUnits&&<InputField label="Syringe size" value={syringeUnits} onChange={setSyringeUnits} type="number" placeholder="100" p={p} suffix="units/mL" hint="Most insulin syringes are 100 units/mL"/>}
-        {mgPreview&&<div style={{marginTop:4,padding:'10px 14px',background:p.primarySoft,borderRadius:R.md,fontFamily:TYPE.mono,fontSize:11,color:p.primary,fontWeight:500}}>{mgPreview}</div>}
+        <InputField label="Concentration (mg/mL)" value={concentration} onChange={setConcentration} type="number" placeholder="e.g. 20" p={p} suffix="mg/mL" hint="The strength printed on your vial label"/>
+        <div style={{marginTop:14,marginBottom:4}}>
+          <div style={{fontFamily:TYPE.ui,fontSize:13,color:p.ink,fontWeight:500,marginBottom:8}}>How do you measure your dose?</div>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>{if(!isUnits){setFormulation('compound_units');setDose('');}}} style={{flex:1,padding:'11px',borderRadius:R.md,background:isUnits?p.primarySoft:p.bgElev,border:`0.5px solid ${isUnits?p.primary:p.line}`,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,color:isUnits?p.primary:p.ink,cursor:'pointer'}}>Units (insulin syringe)</button>
+            <button onClick={()=>{if(!isMl){setFormulation('compound_ml');setDose('');}}} style={{flex:1,padding:'11px',borderRadius:R.md,background:isMl?p.primarySoft:p.bgElev,border:`0.5px solid ${isMl?p.primary:p.line}`,fontFamily:TYPE.ui,fontSize:13,fontWeight:500,color:isMl?p.primary:p.ink,cursor:'pointer'}}>mL (volume)</button>
+          </div>
+        </div>
+        {isUnits&&<div style={{marginTop:14}}><InputField label="Syringe size" value={syringeUnits} onChange={setSyringeUnits} type="number" placeholder="100" p={p} suffix="units/mL" hint="Most insulin syringes are 100 units/mL"/></div>}
+        {mgPreview&&<div style={{marginTop:14,padding:'10px 14px',background:p.primarySoft,borderRadius:R.md,fontFamily:TYPE.mono,fontSize:11,color:p.primary,fontWeight:500}}>{mgPreview}</div>}
         {doseWarn&&<div style={{marginTop:8,padding:'10px 14px',background:`${p.accent}1A`,border:`0.5px solid ${p.accent}66`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:12,color:p.accent,lineHeight:1.45}}>⚠ {doseWarn}</div>}
       </div>}
       <div style={{marginBottom:24}}>
