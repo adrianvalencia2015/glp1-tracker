@@ -588,12 +588,19 @@ function MedSetupForm({p,initialMed,onSave,onCancel,title="Set up medication"}){
   const doseNum=parseFloat(dose);
   const concNum=parseFloat(concentration);
   const syrNum=parseFloat(syringeUnits);
+  let mgPerShot=null;
   if(isUnits&&doseNum>0&&concNum>0&&syrNum>0){
     const mgpu=concNum/syrNum;
-    mgPreview=`${doseNum} units × (${concNum}mg / ${syrNum}u) = ${(doseNum*mgpu).toFixed(2)} mg per shot`;
+    mgPerShot=doseNum*mgpu;
+    const mlPerShot=doseNum/syrNum;
+    mgPreview=`${doseNum} units = ${mlPerShot.toFixed(2)} mL · ${mgPerShot.toFixed(2)} mg per shot`;
   }else if(isMl&&doseNum>0&&concNum>0){
-    mgPreview=`${doseNum} mL × ${concNum} mg/mL = ${(doseNum*concNum).toFixed(2)} mg per shot`;
+    mgPerShot=doseNum*concNum;
+    mgPreview=`${doseNum} mL × ${concNum} mg/mL = ${mgPerShot.toFixed(2)} mg per shot`;
   }
+  let doseWarn=null;
+  if(mgPerShot!=null&&mgPerShot>50)doseWarn=`${mgPerShot.toFixed(0)} mg per shot is very high for a GLP-1 (typical doses are under ~15 mg). Double-check your concentration${isMl?", and make sure you didn't mean units":''}.`;
+  else if(isMl&&doseNum>2)doseWarn=`${doseNum} mL is a large injection volume — most compound users dose in units, not mL. Check that you picked the right option above.`;
 
   function handleSave(){
     const hl=parseFloat(customHalfLife)||db.halfLifeDays;
@@ -660,6 +667,7 @@ function MedSetupForm({p,initialMed,onSave,onCancel,title="Set up medication"}){
         <InputField label="Concentration (mg/mL)" value={concentration} onChange={setConcentration} type="number" placeholder="e.g. 20" p={p} suffix="mg/mL" hint="Found on your vial label"/>
         {isUnits&&<InputField label="Syringe size" value={syringeUnits} onChange={setSyringeUnits} type="number" placeholder="100" p={p} suffix="units/mL" hint="Most insulin syringes are 100 units/mL"/>}
         {mgPreview&&<div style={{marginTop:4,padding:'10px 14px',background:p.primarySoft,borderRadius:R.md,fontFamily:TYPE.mono,fontSize:11,color:p.primary,fontWeight:500}}>{mgPreview}</div>}
+        {doseWarn&&<div style={{marginTop:8,padding:'10px 14px',background:`${p.accent}1A`,border:`0.5px solid ${p.accent}66`,borderRadius:R.md,fontFamily:TYPE.ui,fontSize:12,color:p.accent,lineHeight:1.45}}>⚠ {doseWarn}</div>}
       </div>}
       <div style={{marginBottom:24}}>
         <Eyebrow p={p} style={{marginBottom:10}}>Current dose</Eyebrow>
